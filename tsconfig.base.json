@@ -1,0 +1,92 @@
+{
+    "compilerOptions": {
+        // Allows default imports from modules with no default export.
+        // Enables compatibility with CommonJS modules and allows for more concise import syntax.
+        "allowSyntheticDefaultImports": true,
+
+        // Raises compiler errors about unreachable code.
+        // Catches dead code that will never execute, helping keep the codebase clean.
+        "allowUnreachableCode": false,
+
+        // Raises compiler errors about unused labels.
+        // Unused labels typically indicate a mistake (e.g. a missing return before an object literal).
+        "allowUnusedLabels": false,
+
+        // Enables emit interoperability between CommonJS and ES Modules.
+        // Ensures compatibility with a wide range of module formats and allows default imports from CommonJS modules.
+        "esModuleInterop": true,
+
+        // Errors if an import could resolve differently due to inconsistent casing in file names.
+        // Prevents issues on case-sensitive file systems (e.g. Linux CI) where 'File.ts' and 'file.ts' differ.
+        "forceConsistentCasingInFileNames": true,
+
+        // Ensures each file can be safely transpiled in isolation without relying on other imports.
+        // Required for compatibility with single-file transpilers like esbuild, swc, and Vite.
+        "isolatedModules": true,
+
+        // Enables the React 17+ JSX transform which does not require importing React in every JSX file.
+        "jsx": "react-jsx",
+
+        // Specifies which built-in API type definitions to include.
+        "lib": ["ES2022"],
+
+        // Sets the module system for the emitted JavaScript output.
+        "module": "ES2022",
+
+        // Specifies how TypeScript resolves module specifiers to files.
+        // "bundler" is the modern choice for frontend projects using tools like Vite, esbuild, or webpack.
+        "moduleResolution": "bundler",
+
+        // Reports errors for fallthrough cases in switch statements.
+        // Prevents accidentally falling through from one case to another without a break/return/throw.
+        "noFallthroughCasesInSwitch": true,
+
+        // Requires that overriding methods in subclasses use the 'override' keyword.
+        // When a base class method is renamed or removed, TypeScript flags subclass methods that are out of sync.
+        "noImplicitOverride": true,
+
+        // Ensures all code paths in a function return a value when the function has a return type.
+        // Catches missing return statements in branches.
+        "noImplicitReturns": true,
+
+        // Requires bracket notation for properties from index signatures.
+        // Makes it explicit when accessing a property that is not statically known to exist.
+        "noPropertyAccessFromIndexSignature": true,
+
+        // Reports errors on unused local variables.
+        // Flags variables declared but never read, often indicating incomplete refactors.
+        "noUnusedLocals": true,
+
+        // Reports errors on unused function parameters.
+        // Encourages cleaner function signatures. Parameters prefixed with _ are exempt.
+        "noUnusedParameters": true,
+
+        // Allows importing JSON files as modules.
+        "resolveJsonModule": true,
+
+        // Validates default library declaration files, catching issues with custom type augmentations.
+        "skipDefaultLibCheck": false,
+
+        // Skips type checking of all .d.ts files (third-party type definitions).
+        // Speeds up compilation without sacrificing type safety of your own code.
+        "skipLibCheck": true,
+
+        // Generates corresponding .map files for debugging support.
+        "sourceMap": true,
+
+        // Enables all strict type-checking options (strictNullChecks, strictFunctionTypes, noImplicitAny, etc.).
+        // Provides the strongest guarantees of correctness, catching a wide class of bugs at compile time.
+        "strict": true,
+
+        // Sets the JavaScript language version for emitted output and includes compatible library declarations.
+        "target": "ES2022",
+
+        // Emits class fields using ECMAScript's native semantics.
+        // Better performance and compatibility with JavaScript engines using native class fields.
+        "useDefineForClassFields": true,
+
+        // Requires type-only imports to use 'import type' syntax and erases them from output.
+        // Makes import intent explicit (value vs. type) and ensures correct module erasure.
+        "verbatimModuleSyntax": true
+    }
+}

@@ -1,0 +1,155 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  # ── Validate ────────────────────────────────────────────────────────
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      core-changed: ${{ steps.check.outputs.core-changed }}
+      version: ${{ steps.check.outputs.version }}
+      changelog: ${{ steps.changelog.outputs.notes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm lint
+      - run: pnpm test
+
+      - name: Check if core version is new
+        id: check
+        run: |
+          VERSION=$(node -p "require('./packages/core/package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          # Check if this version exists on npm
+          if npm view "@mhjuma/traverse@$VERSION" version 2>/dev/null; then
+            echo "core-changed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::@mhjuma/traverse@$VERSION already published — skipping npm publish"
+          else
+            echo "core-changed=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::@mhjuma/traverse@$VERSION is new — will publish to npm"
+          fi
+
+      - name: Extract changelog for this release
+        id: changelog
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          VERSION="${TAG#v}"
+          # Extract the section for this version, or [Unreleased] if no versioned section exists
+          NOTES=$(awk "/^## \[${VERSION}\]/{found=1; next} /^## \[/{if(found) exit} found{print}" CHANGELOG.md)
+          if [ -z "$NOTES" ]; then
+            NOTES=$(awk '/^## \[Unreleased\]/{found=1; next} /^## \[/{if(found) exit} found{print}' CHANGELOG.md)
+          fi
+          # Write to output (multiline)
+          {
+            echo "notes<<EOF"
+            echo "$NOTES"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+  # ── Publish to npm (only if version bumped) ─────────────────────────
+  publish-npm:
+    needs: validate
+    if: needs.validate.outputs.core-changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:core
+
+      - name: Publish @mhjuma/traverse@${{ needs.validate.outputs.version }}
+        run: pnpm --filter @mhjuma/traverse publish --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # ── Build Tauri desktop binaries ────────────────────────────────────
+  build-desktop:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            asset_suffix: linux-x64
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            asset_suffix: linux-arm64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            asset_suffix: macos-arm64
+          - os: macos-13
+            target: x86_64-apple-darwin
+            asset_suffix: macos-x64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset_suffix: windows-x64
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            asset_suffix: windows-arm64
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux dependencies
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        run: pnpm build:desktop
+
+      - name: Build Tauri
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: packages/desktop
+          tagName: ${{ github.event.release.tag_name }}
+          releaseName: Traverse ${{ github.event.release.tag_name }}
+          releaseBody: ${{ needs.validate.outputs.changelog }}
+          releaseDraft: false
+          prerelease: false

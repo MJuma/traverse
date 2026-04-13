@@ -1,0 +1,46 @@
+{
+    "name": "@mhjuma/traverse",
+    "version": "0.1.0",
+    "private": false,
+    "publishConfig": {
+        "access": "public"
+    },
+    "main": "src/index.ts",
+    "types": "src/index.ts",
+    "scripts": {
+        "build": "tsc --noEmit",
+        "lint": "oxlint -c ../../oxlintrc.react.json --tsconfig tsconfig.lint.json --type-aware src/",
+        "test": "vitest run"
+    },
+    "dependencies": {
+        "@fluentui/react-components": "catalog:",
+        "@fluentui/react-icons": "catalog:",
+        "@monaco-editor/react": "catalog:",
+        "@tanstack/react-virtual": "catalog:",
+        "monaco-editor": "catalog:",
+        "react": "catalog:",
+        "react-dom": "catalog:",
+        "vega": "catalog:",
+        "vega-lite": "catalog:",
+        "vega-tooltip": "catalog:"
+    },
+    "peerDependencies": {
+        "@azure/msal-browser": ">=3.0.0"
+    },
+    "peerDependenciesMeta": {
+        "@azure/msal-browser": {
+            "optional": true
+        }
+    },
+    "devDependencies": {
+        "@azure/msal-browser": "catalog:development",
+        "@types/react": "catalog:development",
+        "@types/react-dom": "catalog:development",
+        "oxlint": "catalog:development",
+        "oxlint-tsgolint": "catalog:development",
+        "typescript": "catalog:development",
+        "@vitest/coverage-v8": "catalog:development",
+        "vitest": "catalog:development",
+        "jsdom": "catalog:development"
+    }
+}

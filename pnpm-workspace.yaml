@@ -1,0 +1,32 @@
+packages:
+  - 'packages/*'
+
+catalog:
+  '@azure/msal-browser': 5.6.3
+  '@fluentui/react-components': 9.73.7
+  '@fluentui/react-icons': 2.0.323
+  '@monaco-editor/react': 4.7.0
+  '@tanstack/react-virtual': 3.13.23
+  '@tauri-apps/api': 2.10.1
+  monaco-editor: 0.55.1
+  react: 19.2.5
+  react-dom: 19.2.5
+  vega: 6.2.0
+  vega-lite: 6.4.2
+  vega-tooltip: 1.1.0
+
+catalogs:
+  development:
+    '@azure/msal-browser': 5.6.3
+    '@types/node': 25.6.0
+    '@types/react': 19.2.14
+    '@types/react-dom': 19.2.3
+    '@vitejs/plugin-react-swc': 4.3.0
+    '@vitest/coverage-v8': 4.1.4
+    esbuild: 0.28.0
+    jsdom: 29.0.2
+    oxlint: 1.59.0
+    oxlint-tsgolint: 0.20.0
+    typescript: 6.0.2
+    vite: 8.0.8
+    vitest: 4.1.4

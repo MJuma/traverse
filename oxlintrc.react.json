@@ -1,0 +1,256 @@
+{
+    // React oxlint configuration — React-specific rules
+    //
+    // This config contains rules for React projects covering correctness,
+    // suspicious, perf, and accessibility (jsx-a11y) categories.
+    //
+    // Consumer configs should extend both the base and this file:
+    //   { "extends": ["../../configs/oxlintrc.json", "../../configs/oxlintrc.react.json"] }
+
+    "$schema": "./node_modules/oxlint/configuration_schema.json",
+    "plugins": ["react", "react-perf", "jsx-a11y"],
+    "rules": {
+        // ═══════════════════════════════════════════════════════════════
+        // REACT RULES
+        // ═══════════════════════════════════════════════════════════════
+
+        // ── React Correctness ────────────────────────────────────────────
+
+        // Verify dependencies of useEffect and similar hooks are correct.
+        // Missing dependencies cause stale closures; extra ones cause infinite loops.
+        "react/exhaustive-deps": "deny",
+
+        // Require `key` props in iterators/collection literals.
+        // Missing keys cause rendering bugs and poor performance.
+        "react/jsx-key": "deny",
+
+        // Disallow duplicate props in JSX.
+        // Duplicate props silently overwrite each other.
+        "react/jsx-no-duplicate-props": "deny",
+
+        // Disallow undeclared variables in JSX.
+        // Using undefined components fails at runtime.
+        "react/jsx-no-undef": "deny",
+
+        // Disallow passing children as a prop.
+        // Use JSX children syntax instead of children prop.
+        "react/no-children-prop": "deny",
+
+        // Disallow using `dangerouslySetInnerHTML` with children.
+        // Children and dangerouslySetInnerHTML conflict; use one or the other.
+        "react/no-danger-with-children": "deny",
+
+        // Disallow direct mutation of `this.state`.
+        // Use setState() to trigger re-renders properly.
+        "react/no-direct-mutation-state": "deny",
+
+        // Disallow usage of `findDOMNode()`.
+        // findDOMNode is deprecated; use refs instead.
+        "react/no-find-dom-node": "deny",
+
+        // Disallow usage of `isMounted()`.
+        // isMounted is deprecated and an anti-pattern.
+        "react/no-is-mounted": "deny",
+
+        // Disallow using the return value of `ReactDOM.render()`.
+        // The return value is deprecated and will be removed.
+        "react/no-render-return-value": "deny",
+
+        // Disallow string refs.
+        // String refs are deprecated; use callback refs or createRef().
+        "react/no-string-refs": "deny",
+
+        // Disallow `this` in stateless function components.
+        // Functional components don't have a this binding.
+        "react/no-this-in-sfc": "deny",
+
+        // Disallow children for void DOM elements.
+        // Elements like <br>, <img> cannot have children.
+        "react/void-dom-elements-no-children": "deny",
+
+        // Disallow calling `setState` in `componentWillUpdate`.
+        // setState in componentWillUpdate causes infinite update loops.
+        "react/no-will-update-set-state": "deny",
+
+        // Disallow calling `setState` in `componentDidMount`.
+        // setState in componentDidMount causes an extra re-render.
+        "react/no-did-mount-set-state": "deny",
+
+        // Require all `forwardRef` components include a `ref` parameter.
+        // forwardRef without using ref is pointless.
+        "react/forward-ref-uses-ref": "deny",
+
+        // Disallow spreading props multiple times.
+        // Multiple spreads overwrite each other unexpectedly.
+        "react/jsx-props-no-spread-multi": "deny",
+
+        // Disallow usage of unsafe lifecycle methods.
+        // UNSAFE_ lifecycle methods are deprecated and will be removed.
+        "react/no-unsafe": "deny",
+
+        // ── React Suspicious ─────────────────────────────────────────────
+
+        // Require sandbox attribute on iframes.
+        // Iframes without sandbox can execute arbitrary scripts.
+        "react/iframe-missing-sandbox": "deny",
+
+        // Disallow comments from being inserted as text nodes.
+        // `{/* comment */}` in JSX renders as text, not a comment.
+        "react/jsx-no-comment-textnodes": "deny",
+
+        // Disallow `javascript:` URLs.
+        // javascript: URLs are a security risk (XSS).
+        "react/jsx-no-script-url": "deny",
+        // Require style prop to be an object.
+        // Style prop as a string doesn't work in React.
+        "react/style-prop-object": "deny",
+
+        // Disallow namespace in React elements.
+        // Namespaced components like `<Foo:Bar>` are not supported.
+        "react/no-namespace": "deny",
+
+        // ── React Perf ───────────────────────────────────────────────────
+
+        // Disallow JSX elements passed as props.
+        // Passing JSX as props creates new objects on every render.
+        "react-perf/jsx-no-jsx-as-prop": "deny",
+
+        // Disallow new arrays passed as props.
+        // New arrays as props cause unnecessary re-renders.
+        "react-perf/jsx-no-new-array-as-prop": "deny",
+
+        // Disallow new functions passed as props.
+        // New functions as props cause unnecessary re-renders.
+        "react-perf/jsx-no-new-function-as-prop": "deny",
+
+        // Disallow new objects passed as props.
+        // New objects as props cause unnecessary re-renders.
+        "react-perf/jsx-no-new-object-as-prop": "deny",
+
+        // Disallow using array index as React key.
+        // Index keys cause bugs when array order changes.
+        "react/no-array-index-key": "deny",
+
+        // ═══════════════════════════════════════════════════════════════
+        // JSX A11Y RULES
+        // ═══════════════════════════════════════════════════════════════
+
+        // ── JSX A11y Correctness ─────────────────────────────────────────
+
+        // Require alt text for images.
+        // Images without alt text are inaccessible to screen readers.
+        "jsx-a11y/alt-text": "deny",
+
+        // Require anchor elements to have content.
+        // Empty links are confusing for screen reader users.
+        "jsx-a11y/anchor-has-content": "deny",
+
+        // Require valid anchor elements.
+        // Anchors without href or with href="#" are not accessible.
+        "jsx-a11y/anchor-is-valid": "deny",
+
+        // Require elements with aria-activedescendant to be tabbable.
+        // Non-tabbable elements with aria-activedescendant are not keyboard accessible.
+        "jsx-a11y/aria-activedescendant-has-tabindex": "deny",
+
+        // Require valid ARIA props.
+        // Invalid aria-* props don't do anything.
+        "jsx-a11y/aria-props": "deny",
+
+        // Require valid values for ARIA props.
+        // Invalid ARIA values can confuse assistive technologies.
+        "jsx-a11y/aria-proptypes": "deny",
+
+        // Require valid ARIA roles.
+        // Invalid roles don't provide accessibility benefits.
+        "jsx-a11y/aria-role": "deny",
+
+        // Disallow ARIA attributes on elements that don't support them.
+        // ARIA on non-semantic elements like <meta> is pointless.
+        "jsx-a11y/aria-unsupported-elements": "deny",
+
+        // Require valid autocomplete attribute.
+        // Invalid autocomplete values break browser autofill.
+        "jsx-a11y/autocomplete-valid": "deny",
+
+        // Require keyboard events with click events.
+        // Click-only handlers exclude keyboard users.
+        "jsx-a11y/click-events-have-key-events": "deny",
+
+        // Require headings to have content.
+        // Empty headings break document structure for screen readers.
+        "jsx-a11y/heading-has-content": "deny",
+
+        // Require lang attribute on <html>.
+        // Missing lang attribute affects screen reader pronunciation.
+        "jsx-a11y/html-has-lang": "deny",
+
+        // Require title on iframes.
+        // Iframes without titles are not accessible.
+        "jsx-a11y/iframe-has-title": "deny",
+
+        // Disallow redundant alt text.
+        // Alt text like "image of" is redundant; screen readers announce images.
+        "jsx-a11y/img-redundant-alt": "deny",
+
+        // Require labels to be associated with controls.
+        // Unassociated labels don't help screen reader users.
+        "jsx-a11y/label-has-associated-control": "deny",
+
+        // Require valid lang attribute value.
+        // Invalid lang codes affect screen reader pronunciation.
+        "jsx-a11y/lang": "deny",
+
+        // Require captions on media elements.
+        // Video/audio without captions excludes deaf users.
+        "jsx-a11y/media-has-caption": "deny",
+
+        // Require keyboard events with mouse events.
+        // Mouse-only handlers exclude keyboard users.
+        "jsx-a11y/mouse-events-have-key-events": "deny",
+
+        // Disallow accessKey prop.
+        // accessKey conflicts with screen reader shortcuts.
+        "jsx-a11y/no-access-key": "deny",
+
+        // Disallow aria-hidden on focusable elements.
+        // Hidden but focusable elements confuse screen reader users.
+        "jsx-a11y/no-aria-hidden-on-focusable": "deny",
+
+        // Disallow autofocus.
+        // Autofocus is disorienting for screen reader users.
+        "jsx-a11y/no-autofocus": "deny",
+
+        // Disallow distracting elements like <marquee>.
+        // Marquee and blink are inaccessible and distracting.
+        "jsx-a11y/no-distracting-elements": "deny",
+
+        // Disallow tabindex on non-interactive elements.
+        // Non-interactive elements in tab order confuse keyboard users.
+        "jsx-a11y/no-noninteractive-tabindex": "deny",
+
+        // Disallow redundant ARIA roles.
+        // `<button role="button">` is redundant.
+        "jsx-a11y/no-redundant-roles": "deny",
+
+        // Prefer semantic HTML over ARIA roles.
+        // Use <button> instead of <div role="button">.
+        "jsx-a11y/prefer-tag-over-role": "deny",
+
+        // Require ARIA roles to have required attributes.
+        // Roles without required attributes don't work properly.
+        "jsx-a11y/role-has-required-aria-props": "deny",
+
+        // Require ARIA props to be supported by their role.
+        // Unsupported ARIA props on roles are ignored.
+        "jsx-a11y/role-supports-aria-props": "deny",
+
+        // Require scope attribute only on <th> elements.
+        // scope on non-th elements is invalid.
+        "jsx-a11y/scope": "deny",
+
+        // Disallow positive tabindex.
+        // Positive tabindex breaks natural tab order.
+        "jsx-a11y/tabindex-no-positive": "deny"
+    }
+}

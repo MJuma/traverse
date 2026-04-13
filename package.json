@@ -1,0 +1,39 @@
+{
+    "name": "traverse",
+    "private": true,
+    "type": "module",
+    "packageManager": "pnpm@10.12.1",
+    "engines": {
+        "node": ">=22"
+    },
+    "scripts": {
+        "build": "pnpm -r run build",
+        "lint": "pnpm -r run lint",
+        "test": "pnpm -r run test",
+        "build:core": "pnpm --filter @mhjuma/traverse run build",
+        "build:web": "pnpm --filter traverse-web run build",
+        "build:desktop": "pnpm --filter traverse-desktop run build",
+        "lint:core": "pnpm --filter @mhjuma/traverse run lint",
+        "lint:web": "pnpm --filter traverse-web run lint",
+        "lint:desktop": "pnpm --filter traverse-desktop run lint",
+        "test:core": "pnpm --filter @mhjuma/traverse run test",
+        "test:web": "pnpm --filter traverse-web run test",
+        "test:desktop": "pnpm --filter traverse-desktop run test",
+        "serve:web": "pnpm --filter traverse-web run serve",
+        "serve:desktop": "pnpm --filter traverse-desktop run serve",
+        "docs:dev": "vitepress dev docs",
+        "docs:build": "vitepress build docs",
+        "docs:preview": "vitepress preview docs"
+    },
+    "pnpm": {
+        "onlyBuiltDependencies": [
+            "@swc/core",
+            "esbuild",
+            "oxlint-tsgolint",
+            "@oxlint-tsgolint/linux-arm64"
+        ]
+    },
+    "devDependencies": {
+        "vitepress": "^1.6.4"
+    }
+}

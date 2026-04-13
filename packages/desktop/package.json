@@ -1,0 +1,30 @@
+{
+    "name": "traverse-desktop",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "build": "tsc --noEmit && vite build",
+        "serve": "vite",
+        "lint": "oxlint -c ../../oxlintrc.react.json --tsconfig tsconfig.lint.json --type-aware src/"
+    },
+    "dependencies": {
+        "@mhjuma/traverse": "workspace:*",
+        "@azure/msal-browser": "catalog:",
+        "@fluentui/react-components": "catalog:",
+        "@tauri-apps/api": "catalog:",
+        "react": "catalog:",
+        "react-dom": "catalog:"
+    },
+    "devDependencies": {
+        "@types/node": "catalog:development",
+        "@types/react": "catalog:development",
+        "@types/react-dom": "catalog:development",
+        "@vitejs/plugin-react-swc": "catalog:development",
+        "oxlint": "catalog:development",
+        "oxlint-tsgolint": "catalog:development",
+        "typescript": "catalog:development",
+        "vite": "catalog:development",
+        "esbuild": "catalog:development"
+    }
+}
