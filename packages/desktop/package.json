@@ -1,0 +1,37 @@
+{
+    "name": "traverse-desktop",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "build": "tsc --noEmit && vite build",
+        "serve": "vite",
+        "dev": "tauri dev",
+        "build:tauri": "tauri build",
+        "tauri": "tauri",
+        "lint": "oxlint -c ../../oxlintrc.react.json --tsconfig tsconfig.lint.json --type-aware src/"
+    },
+    "dependencies": {
+        "@mhjuma/traverse": "workspace:*",
+        "@fluentui/react-components": "catalog:",
+        "@fluentui/react-icons": "catalog:",
+        "@tauri-apps/api": "catalog:",
+        "@tauri-apps/plugin-notification": "catalog:",
+        "@tauri-apps/plugin-store": "catalog:",
+        "@tauri-apps/plugin-updater": "catalog:",
+        "react": "catalog:",
+        "react-dom": "catalog:"
+    },
+    "devDependencies": {
+        "@tauri-apps/cli": "catalog:development",
+        "@types/node": "catalog:development",
+        "@types/react": "catalog:development",
+        "@types/react-dom": "catalog:development",
+        "@vitejs/plugin-react-swc": "catalog:development",
+        "oxlint": "catalog:development",
+        "oxlint-tsgolint": "catalog:development",
+        "typescript": "catalog:development",
+        "vite": "catalog:development",
+        "esbuild": "catalog:development"
+    }
+}

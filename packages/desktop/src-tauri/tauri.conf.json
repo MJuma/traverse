@@ -1,0 +1,48 @@
+{
+    "$schema": "https://schema.tauri.app/config/2",
+    "productName": "Traverse",
+    "version": "0.1.0",
+    "identifier": "com.mhjuma.traverse",
+    "build": {
+        "frontendDist": "../dist",
+        "devUrl": "http://localhost:5175",
+        "beforeDevCommand": "pnpm serve",
+        "beforeBuildCommand": "pnpm build"
+    },
+    "app": {
+        "windows": [
+            {
+                "title": "Traverse",
+                "titleBarStyle": "Overlay",
+                "dragDropEnabled": false,
+                "width": 1280,
+                "height": 800,
+                "resizable": true,
+                "fullscreen": false
+            }
+        ],
+        "security": {
+            "csp": null
+        }
+    },
+    "bundle": {
+        "active": true,
+        "targets": "all",
+        "icon": [
+            "icons/32x32.png",
+            "icons/128x128.png",
+            "icons/128x128@2x.png",
+            "icons/icon.icns",
+            "icons/icon.ico"
+        ],
+        "createUpdaterArtifacts": true
+    },
+    "plugins": {
+        "updater": {
+            "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEEzMjA0RUFFREJDMTQyNjIKUldSaVFzSGJyazRnbzBSb3hqV082ZlppclhMbWxrdTY2c08wWldwUU1TTUVLWHNuYkh2VGZBZFYK",
+            "endpoints": [
+                "https://github.com/MJuma/traverse/releases/latest/download/latest.json"
+            ]
+        }
+    }
+}
