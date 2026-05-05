@@ -67,6 +67,22 @@ describe('StateService', () => {
             expect(svc.get<{ name: string }[]>('explorerConnections', 'list')).toEqual([{ name: 'test' }]);
         });
 
+        it('bootstraps explorerTabs from localStorage', () => {
+            const snapshot = {
+                version: 1,
+                tabs: [{ id: 'tab-1', title: 'Q', kql: 'Table | take 1', connectionId: 'conn-1' }],
+                activeTabId: 'tab-1',
+                splitEnabled: false,
+                splitDirection: 'vertical',
+                splitTabId: null,
+                focusedPane: 'primary',
+            };
+            const entry: StoreEntry = { value: snapshot, timestamp: Date.now() };
+            mockLS.setItem('traverse-state:explorerTabs:snapshot', JSON.stringify(entry));
+            const svc = new StateService();
+            expect(svc.get('explorerTabs', 'snapshot')).toEqual(snapshot);
+        });
+
         it('skips expired bootstrap entries', () => {
             const entry: StoreEntry = { value: 'old', timestamp: Date.now() - 999999999, ttl: 1 };
             mockLS.setItem('traverse-state:config:stale', JSON.stringify(entry));

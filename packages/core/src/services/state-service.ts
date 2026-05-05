@@ -10,7 +10,7 @@
 // Types
 // ---------------------------------------------------------------------------
 
-export type StoreName = 'config' | 'queryCache' | 'explorerCache' | 'explorerConnections';
+export type StoreName = 'config' | 'queryCache' | 'explorerCache' | 'explorerConnections' | 'explorerTabs';
 
 export interface StoreEntry<T = unknown> {
     value: T;
@@ -53,12 +53,15 @@ const STORE_CONFIGS: Record<StoreName, StoreConfig> = {
     queryCache: { defaultTtlMs: 15 * 60 * 1000, persist: true, syncBootstrap: false },
     explorerCache: { maxEntries: 200, persist: true, syncBootstrap: false },
     explorerConnections: { persist: true, syncBootstrap: true },
+    explorerTabs: { persist: true, syncBootstrap: true },
 };
 
 export const STORE_NAMES = Object.keys(STORE_CONFIGS) as StoreName[];
 
 const IDB_NAME = 'traverse-state';
-const IDB_VERSION = 1;
+// Bump when adding new stores to STORE_CONFIGS so onupgradeneeded creates them
+// for existing users who already have the database at the prior version.
+const IDB_VERSION = 2;
 const LS_PREFIX = 'traverse-state:';
 
 // ---------------------------------------------------------------------------
@@ -173,9 +176,13 @@ export class StateService {
             this.listeners.set(name, new Map());
             this.storeVersions.set(name, 0);
         }
-        // Synchronous bootstrap: read config and explorerConnections from localStorage
-        this.bootstrapFromLocalStorage('config');
-        this.bootstrapFromLocalStorage('explorerConnections');
+        // Synchronous bootstrap from localStorage for stores with syncBootstrap: true.
+        // This avoids a flash of default state on page load before IndexedDB hydrates.
+        for (const name of STORE_NAMES) {
+            if (STORE_CONFIGS[name].syncBootstrap) {
+                this.bootstrapFromLocalStorage(name);
+            }
+        }
     }
 
     // --- Bootstrap (sync) ---

@@ -61,6 +61,7 @@ vi.mock('../ExplorerWorkspace/ExplorerWorkspace.logic', () => ({
     getQueryToRunFromEditor: vi.fn(() => ''),
     KEYBOARD_SHORTCUTS: [],
     createTab: vi.fn((q: string, title: string) => ({ id: '1', query: q, title, kql: '', connectionId: 'test-conn' })),
+    bumpTabCounterPast: vi.fn(),
     loadConnections: vi.fn(() => [{ id: 'test-conn', name: 'Test Cluster', clusterUrl: 'https://help.kusto.windows.net', database: 'Telemetry', color: '#909d63' }]),
     loadActiveConnectionId: vi.fn(() => 'test-conn'),
     saveConnections: vi.fn(),
@@ -73,6 +74,16 @@ vi.mock('../ExplorerWorkspace/ExplorerWorkspace.logic', () => ({
     buildErrorEntry: vi.fn(() => ({})),
     DEFAULT_CONNECTION: { id: 'test-conn', name: 'Test Cluster', clusterUrl: 'https://help.kusto.windows.net', database: 'Telemetry', color: '#909d63' },
     CONNECTION_COLORS: ['#909d63', '#6a8799', '#ebc17a', '#bc5653', '#b06698'],
+}));
+// Stub persistence so the save effect doesn't write to a real stateService
+// and the createInitialState hydration path returns null deterministically.
+vi.mock('../../state/persistence', () => ({
+    SNAPSHOT_VERSION: 1,
+    loadSnapshot: vi.fn(() => null),
+    saveSnapshot: vi.fn(),
+    clearSnapshot: vi.fn(),
+    validateAndCleanSnapshot: vi.fn(() => null),
+    extractSnapshot: vi.fn((s: { tabs: unknown[]; activeTabId: string }) => ({ version: 1, tabs: s.tabs, activeTabId: s.activeTabId, splitEnabled: false, splitDirection: 'vertical', splitTabId: null, focusedPane: 'primary' })),
 }));
 vi.mock('../ExplorerWorkspace/kqlLanguage', () => ({
     registerKqlLanguage: vi.fn(),
@@ -611,5 +622,105 @@ describe('Explorer', () => {
             root.render(React.createElement(Explorer));
         });
         expect(container.innerHTML).not.toBe('');
+    });
+});
+
+describe('Explorer snapshot persistence', () => {
+    let container: HTMLDivElement;
+    let root: ReturnType<typeof createRoot>;
+    let originalLocation: Location;
+    let saveSpy: ReturnType<typeof vi.fn>;
+
+    beforeEach(async () => {
+        vi.useFakeTimers();
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        container = document.createElement('div');
+        document.body.appendChild(container);
+        root = createRoot(container);
+        mockExplorerState.mockReturnValue(defaultExplorerState);
+        mockActiveTabs.mockReturnValue({ activeTab: mockActiveTab, splitTab: null });
+        originalLocation = window.location;
+
+        const persistence = await import('../../state/persistence');
+        saveSpy = persistence.saveSnapshot as unknown as ReturnType<typeof vi.fn>;
+        saveSpy.mockClear();
+    });
+
+    afterEach(() => {
+        act(() => { root.unmount(); });
+        container.remove();
+        vi.useRealTimers();
+        Object.defineProperty(window, 'location', { value: originalLocation, writable: true });
+        vi.restoreAllMocks();
+    });
+
+    function setUrlQuery(query: string | null) {
+        const search = query ? `?query=${encodeURIComponent(query)}` : '';
+        Object.defineProperty(window, 'location', {
+            value: { ...originalLocation, search } as Location,
+            writable: true,
+        });
+    }
+
+    it('persists the tab snapshot after the debounce window', () => {
+        setUrlQuery(null);
+        act(() => { root.render(React.createElement(Explorer)); });
+        expect(saveSpy).not.toHaveBeenCalled();
+
+        act(() => { vi.advanceTimersByTime(300); });
+
+        expect(saveSpy).toHaveBeenCalledTimes(1);
+        const arg = saveSpy.mock.calls[0][0] as { version: number; tabs: unknown[] };
+        expect(arg.version).toBe(1);
+        expect(Array.isArray(arg.tabs)).toBe(true);
+    });
+
+    it('does not persist when in deep-link (?query=) mode', () => {
+        setUrlQuery('SomeTable | take 5');
+        act(() => { root.render(React.createElement(Explorer)); });
+        act(() => { vi.advanceTimersByTime(1000); });
+        expect(saveSpy).not.toHaveBeenCalled();
+    });
+
+    it('does not persist on pagehide while in deep-link mode', () => {
+        setUrlQuery('SomeTable | take 5');
+        act(() => { root.render(React.createElement(Explorer)); });
+        act(() => { window.dispatchEvent(new Event('pagehide')); });
+        act(() => { vi.advanceTimersByTime(1000); });
+        expect(saveSpy).not.toHaveBeenCalled();
+    });
+
+    it('flushes a pending snapshot on component unmount', () => {
+        setUrlQuery(null);
+        act(() => { root.render(React.createElement(Explorer)); });
+        // Pending in the debounce window — debounce timer not yet elapsed.
+        expect(saveSpy).not.toHaveBeenCalled();
+
+        act(() => { root.unmount(); });
+
+        expect(saveSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('flushes a pending snapshot on pagehide', () => {
+        setUrlQuery(null);
+        act(() => { root.render(React.createElement(Explorer)); });
+        expect(saveSpy).not.toHaveBeenCalled();
+
+        act(() => { window.dispatchEvent(new Event('pagehide')); });
+
+        expect(saveSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not double-flush after the debounce already saved', () => {
+        setUrlQuery(null);
+        act(() => { root.render(React.createElement(Explorer)); });
+        act(() => { vi.advanceTimersByTime(300); });
+        expect(saveSpy).toHaveBeenCalledTimes(1);
+
+        act(() => { window.dispatchEvent(new Event('pagehide')); });
+
+        // Debounced write already cleared pendingRef; pagehide is a no-op.
+        expect(saveSpy).toHaveBeenCalledTimes(1);
     });
 });

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createInitialState, explorerReducer } from './reducer';
 import type { ExplorerState, ExplorerAction } from './index';
 
@@ -12,6 +12,12 @@ vi.mock('../services/state-service', () => ({
 }));
 
 const mockStore = new Map<string, unknown>();
+
+// Clear the mock store for every test (in this file). The reducer hydrates
+// from stateService on createInitialState, so leftover entries from one
+// test would leak into the next.
+beforeEach(() => { mockStore.clear(); });
+afterEach(() => { mockStore.clear(); });
 
 
 
@@ -91,6 +97,129 @@ describe('createInitialState', () => {
         const state = createInitialState({ initialQuery: 'Table | take 10', defaultClusters: [] });
 
         expect(state.tabs[0].connectionId).toBe('conn-1');
+    });
+
+    describe('snapshot hydration', () => {
+        const conns = [
+            { id: 'conn-1', name: 'Cluster A', clusterUrl: 'https://a.kusto.windows.net', database: 'DbA', color: '#909d63' },
+            { id: 'conn-2', name: 'Cluster B', clusterUrl: 'https://b.kusto.windows.net', database: 'DbB', color: '#6a8799' },
+        ];
+
+        function setSnapshot(partial: Record<string, unknown>) {
+            mockStore.set('snapshot', {
+                version: 1,
+                tabs: [{ id: 'tab-7', title: 'My Tab', kql: 'A | take 1', connectionId: 'conn-1' }],
+                activeTabId: 'tab-7',
+                splitEnabled: false,
+                splitDirection: 'vertical',
+                splitTabId: null,
+                focusedPane: 'primary',
+                ...partial,
+            });
+        }
+
+        it('restores tabs and split state from a valid snapshot', () => {
+            mockStore.set('list', conns);
+            setSnapshot({
+                tabs: [
+                    { id: 'tab-1', title: 'Q1', kql: 'A', connectionId: 'conn-1' },
+                    { id: 'tab-2', title: 'Q2', kql: 'B', connectionId: 'conn-2' },
+                ],
+                activeTabId: 'tab-2',
+                splitEnabled: true,
+                splitDirection: 'horizontal',
+                splitTabId: 'tab-1',
+                focusedPane: 'secondary',
+            });
+
+            const state = createInitialState({ initialQuery: 'IGNORED', defaultClusters: [] });
+
+            expect(state.tabs).toHaveLength(2);
+            expect(state.tabs[0].kql).toBe('A');
+            expect(state.tabs[1].kql).toBe('B');
+            expect(state.activeTabId).toBe('tab-2');
+            expect(state.splitEnabled).toBe(true);
+            expect(state.splitDirection).toBe('horizontal');
+            expect(state.splitTabId).toBe('tab-1');
+            expect(state.focusedPane).toBe('secondary');
+        });
+
+        it('uses initialQuery when no snapshot exists', () => {
+            mockStore.set('list', conns);
+            const state = createInitialState({ initialQuery: 'MyTable | take 5', defaultClusters: [] });
+            expect(state.tabs).toHaveLength(1);
+            expect(state.tabs[0].kql).toBe('MyTable | take 5');
+        });
+
+        it('uses initialQuery when skipSnapshot is true (URL deep-link)', () => {
+            mockStore.set('list', conns);
+            setSnapshot({});
+            const state = createInitialState({ initialQuery: 'FromUrl | take 1', defaultClusters: [], skipSnapshot: true });
+            expect(state.tabs).toHaveLength(1);
+            expect(state.tabs[0].kql).toBe('FromUrl | take 1');
+        });
+
+        it('falls back to initialQuery when snapshot is invalid (wrong version)', () => {
+            mockStore.set('list', conns);
+            mockStore.set('snapshot', { version: 99, tabs: [] });
+            const state = createInitialState({ initialQuery: 'fallback', defaultClusters: [] });
+            expect(state.tabs[0].kql).toBe('fallback');
+        });
+
+        it('falls back to initialQuery when snapshot has no tabs', () => {
+            mockStore.set('list', conns);
+            setSnapshot({ tabs: [] });
+            const state = createInitialState({ initialQuery: 'fallback', defaultClusters: [] });
+            expect(state.tabs[0].kql).toBe('fallback');
+        });
+
+        it('remaps stale tab connectionId to the active connection', () => {
+            mockStore.set('list', conns);
+            mockStore.set('explorer-active-connection', 'conn-2');
+            setSnapshot({
+                tabs: [{ id: 'tab-1', title: 'Q', kql: 'X', connectionId: 'gone' }],
+                activeTabId: 'tab-1',
+            });
+            const state = createInitialState({ initialQuery: '', defaultClusters: [] });
+            expect(state.tabs[0].connectionId).toBe('conn-2');
+            expect(state.tabs[0].kql).toBe('X');
+        });
+
+        it('resets the split when splitTabId is missing from restored tabs', () => {
+            mockStore.set('list', conns);
+            setSnapshot({
+                tabs: [{ id: 'tab-1', title: 'Q', kql: '', connectionId: 'conn-1' }],
+                activeTabId: 'tab-1',
+                splitEnabled: true,
+                splitTabId: 'tab-99',
+                focusedPane: 'secondary',
+            });
+            const state = createInitialState({ initialQuery: '', defaultClusters: [] });
+            expect(state.splitEnabled).toBe(false);
+            expect(state.splitTabId).toBeNull();
+            expect(state.focusedPane).toBe('primary');
+        });
+
+        it('bumps tabCounter past restored ids so subsequent ADD_TAB does not collide', () => {
+            mockStore.set('list', conns);
+            setSnapshot({
+                tabs: [
+                    { id: 'tab-5', title: 'A', kql: '', connectionId: 'conn-1' },
+                    { id: 'tab-9', title: 'B', kql: '', connectionId: 'conn-1' },
+                ],
+                activeTabId: 'tab-5',
+            });
+            const state = createInitialState({ initialQuery: '', defaultClusters: [] });
+
+            const next = explorerReducer(state, { type: 'ADD_TAB' });
+            const newId = next.tabs[next.tabs.length - 1].id;
+            expect(newId).not.toBe('tab-5');
+            expect(newId).not.toBe('tab-9');
+            // New id should sit past tab-9
+            const m = /^tab-(\d+)$/.exec(newId);
+            expect(m).not.toBeNull();
+            expect(Number(m![1])).toBeGreaterThan(9);
+        });
     });
 });
 
@@ -630,14 +759,16 @@ describe('explorerReducer', () => {
     });
 
     describe('createInitialState with connections', () => {
+        const cluster = { id: 'conn-1', name: 'Cluster A', clusterUrl: 'https://a.kusto.windows.net', database: 'DbA', color: '#909d63' };
+
         it('loads connections', () => {
-            const state = createInitialState({ initialQuery: '', defaultClusters: [] });
+            const state = createInitialState({ initialQuery: '', defaultClusters: [cluster] });
             expect(state.connections.length).toBeGreaterThanOrEqual(1);
             expect(state.connections[0].id).toBeTruthy();
         });
 
         it('first tab has a connectionId', () => {
-            const state = createInitialState({ initialQuery: '', defaultClusters: [] });
+            const state = createInitialState({ initialQuery: '', defaultClusters: [cluster] });
             expect(state.tabs[0].connectionId).toBeTruthy();
         });
     });

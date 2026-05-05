@@ -12,3 +12,5 @@ export type { KustoClient, KustoClientConfig, KustoTarget, KustoStateService, Ku
 export { useKustoQuery, useKustoMgmtQuery } from './services/useKustoQuery';
 export { bootstrapExplorer, useExplorerTheme } from './bootstrap';
 export type { BootstrapExplorerOptions } from './bootstrap';
+export { loadSnapshot, saveSnapshot, clearSnapshot, validateAndCleanSnapshot, extractSnapshot, SNAPSHOT_VERSION } from './state/persistence';
+export type { ExplorerTabsSnapshot } from './state/persistence';

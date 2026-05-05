@@ -5,27 +5,22 @@
 
 import type { ExplorerState, InitialStateArgs } from './types';
 import type { ExplorerAction } from './actions';
-import { createTab, nextQueryTitle, loadConnections, loadActiveConnectionId } from '../components/ExplorerWorkspace/ExplorerWorkspace.logic';
+import { createTab, nextQueryTitle, loadConnections, loadActiveConnectionId, bumpTabCounterPast } from '../components/ExplorerWorkspace/ExplorerWorkspace.logic';
 import { SUPPORTED_RENDER_TYPES } from '../components/ChartPanel/ChartPanel.logic';
+import { loadSnapshot, validateAndCleanSnapshot } from './persistence';
 
-export function createInitialState({ initialQuery, defaultClusters }: InitialStateArgs): ExplorerState {
+export function createInitialState({ initialQuery, defaultClusters, skipSnapshot = false }: InitialStateArgs): ExplorerState {
     const connections = loadConnections(defaultClusters);
-    const firstTab = createTab(initialQuery, 'Query 1', loadActiveConnectionId(connections));
-    return {
+    const activeConnectionId = loadActiveConnectionId(connections);
+
+    const baseDefaults = {
         connections,
 
         schema: [],
         schemaSearch: '',
-        expandedFolders: new Set(),
-        expandedTables: new Set(),
+        expandedFolders: new Set<string>(),
+        expandedTables: new Set<string>(),
         schemaContextMenu: null,
-
-        tabs: [firstTab],
-        activeTabId: firstTab.id,
-        splitEnabled: false,
-        splitDirection: 'vertical',
-        splitTabId: null,
-        focusedPane: 'primary',
 
         loading: false,
         error: null,
@@ -40,13 +35,43 @@ export function createInitialState({ initialQuery, defaultClusters }: InitialSta
         queryStats: null,
         resultSets: [],
         activeResultSet: 0,
-        resultsTab: 'results',
+        resultsTab: 'results' as const,
 
         history: [],
 
         editorHeight: 50,
         hasSelection: false,
         canRecall: false,
+    } satisfies Partial<ExplorerState>;
+
+    if (!skipSnapshot) {
+        const raw = loadSnapshot();
+        if (raw) {
+            const snap = validateAndCleanSnapshot(raw, connections, activeConnectionId);
+            if (snap) {
+                bumpTabCounterPast(snap.tabs);
+                return {
+                    ...baseDefaults,
+                    tabs: snap.tabs,
+                    activeTabId: snap.activeTabId,
+                    splitEnabled: snap.splitEnabled,
+                    splitDirection: snap.splitDirection,
+                    splitTabId: snap.splitTabId,
+                    focusedPane: snap.focusedPane,
+                };
+            }
+        }
+    }
+
+    const firstTab = createTab(initialQuery, 'Query 1', activeConnectionId);
+    return {
+        ...baseDefaults,
+        tabs: [firstTab],
+        activeTabId: firstTab.id,
+        splitEnabled: false,
+        splitDirection: 'vertical',
+        splitTabId: null,
+        focusedPane: 'primary',
     };
 }
 
