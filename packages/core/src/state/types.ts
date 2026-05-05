@@ -51,4 +51,10 @@ export interface ExplorerState {
 export interface InitialStateArgs {
     initialQuery: string;
     defaultClusters: KustoConnection[];
+    /**
+     * When true, ignore any persisted tab snapshot and start fresh with
+     * `initialQuery` in a single tab. The Explorer sets this when the
+     * URL contains a `?query=` parameter so deep-links always win.
+     */
+    skipSnapshot?: boolean;
 }

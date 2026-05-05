@@ -53,6 +53,32 @@ export function createTab(kql = '', title?: string, connectionId = ''): QueryTab
     return { id, title: title ?? `Query ${n}`, kql, connectionId };
 }
 
+/**
+ * Bump the internal tab counter so it sits past the highest numeric suffix
+ * in the supplied tab ids. Used by snapshot hydration to ensure ids created
+ * by subsequent createTab() calls do not collide with restored ids.
+ */
+export function bumpTabCounterPast(tabs: readonly QueryTab[]): void {
+    let max = 0;
+    for (const t of tabs) {
+        const m = /^tab-(\d+)$/.exec(t.id);
+        if (m) {
+            const n = Number(m[1]);
+            if (Number.isFinite(n) && n > max) {
+                max = n;
+            }
+        }
+    }
+    if (max + 1 > tabCounter) {
+        tabCounter = max + 1;
+    }
+}
+
+/** Test-only helper to reset the module-scoped tab counter. */
+export function _resetTabCounter(n: number = 1): void {
+    tabCounter = n;
+}
+
 export function nextQueryTitle(existingTabs: QueryTab[]): string {
     const used = new Set(
         existingTabs
