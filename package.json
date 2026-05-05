@@ -24,7 +24,10 @@
         "dev:desktop": "pnpm --filter traverse-desktop run dev",
         "docs:dev": "vitepress dev docs",
         "docs:build": "vitepress build docs",
-        "docs:preview": "vitepress preview docs"
+        "docs:preview": "vitepress preview docs",
+        "changeset": "changeset",
+        "changeset:version": "changeset version",
+        "publish:core": "pnpm --filter @mhjuma/traverse publish --no-git-checks"
     },
     "pnpm": {
         "onlyBuiltDependencies": [
@@ -35,6 +38,7 @@
         ]
     },
     "devDependencies": {
+        "@changesets/cli": "catalog:development",
         "vitepress": "^1.6.4"
     }
 }
