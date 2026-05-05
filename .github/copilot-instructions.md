@@ -21,6 +21,11 @@ pnpm build:core      # Build core only
 pnpm test:core       # Test core only
 pnpm serve:web       # Run web app
 pnpm docs:dev        # Preview docs
+
+# Versioning & Publishing
+pnpm changeset              # Create a changeset for your PR
+pnpm changeset:version      # Bump version + generate changelog
+pnpm publish:core           # Publish @mhjuma/traverse to npm
 ```
 
 ## Dependency Management

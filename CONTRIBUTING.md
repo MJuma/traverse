@@ -15,8 +15,14 @@ pnpm install
 1. Fork the repo and create a branch from `master`
 2. Make your changes
 3. Ensure `pnpm build && pnpm lint && pnpm test` all pass
-4. Update `CHANGELOG.md` under `[Unreleased]` if your change is user-facing
-5. Open a pull request
+4. If your change modifies `packages/core/`, create a changeset and bump the version:
+   ```bash
+   pnpm changeset              # describe the change and bump type
+   pnpm changeset:version      # bump version + update CHANGELOG.md
+   ```
+5. Commit and open a pull request
+
+Changes to `packages/core/` require a version bump — the CI will enforce this. See `.changeset/README.md` for details.
 
 ## Code Style
 

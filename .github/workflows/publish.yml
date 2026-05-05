@@ -1,0 +1,59 @@
+name: Publish
+
+on:
+  push:
+    branches: [master]
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Check version bump
+        id: version_check
+        run: bash packages/scripts/check-changeset.sh publish
+
+      - name: Publish to npm
+        if: steps.version_check.outputs.skip_publish != 'true'
+        run: pnpm --filter @mhjuma/traverse publish --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create git tag
+        if: steps.version_check.outputs.skip_publish != 'true'
+        run: |
+          VERSION=$(node -p "require('./packages/core/package.json').version")
+          TAG="v${VERSION}"
+          if git ls-remote --tags origin "refs/tags/${TAG}" | grep -q "${TAG}"; then
+            echo "ℹ️  Tag ${TAG} already exists — skipping."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag "${TAG}"
+            git push origin "${TAG}"
+            echo "✅ Created and pushed tag ${TAG}"
+          fi
