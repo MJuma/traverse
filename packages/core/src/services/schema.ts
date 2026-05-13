@@ -25,9 +25,33 @@ export interface KustoSchemaDb {
     ExternalTables?: Record<string, { Folder?: string; DocString?: string; OrderedColumns?: { Name: string; CslType: string }[] }>;
 }
 
+/**
+ * Root payload returned by Kusto's `.show database schema as json` command.
+ * Shape matches what `@kusto/monaco-kusto`'s `setSchemaFromShowSchema` expects.
+ * Kept loose (optional fields) so older cluster responses still parse.
+ */
+export interface RawShowSchema {
+    readonly Plugins?: readonly unknown[];
+    readonly Databases: Record<string, RawShowSchemaDatabase>;
+}
+
+export interface RawShowSchemaDatabase {
+    readonly Name?: string;
+    readonly Tables?: Record<string, unknown>;
+    readonly ExternalTables?: Record<string, unknown>;
+    readonly MaterializedViews?: Record<string, unknown>;
+    readonly Functions?: Record<string, unknown>;
+    readonly EntityGroups?: Record<string, readonly string[]>;
+    readonly Graphs?: Record<string, unknown>;
+    readonly MajorVersion?: number;
+    readonly MinorVersion?: number;
+    readonly DatabaseAccessMode?: string;
+}
+
 // Per-cluster schema cache
 const schemaCache = new Map<string, SchemaTable[]>();
 const foldersCache = new Map<string, string[]>();
+const rawSchemaCache = new Map<string, RawShowSchema>();
 const loadingPromises = new Map<string, Promise<void>>();
 
 function cacheKey(target?: KustoTarget): string {
@@ -39,6 +63,10 @@ function cacheKey(target?: KustoTarget): string {
 
 function persistSchemaKey(target: KustoTarget): string {
     return `schema:${target.clusterUrl}|${target.database}`;
+}
+
+function persistRawSchemaKey(target: KustoTarget): string {
+    return `raw-schema:${target.clusterUrl}|${target.database}`;
 }
 
 function persistDbKey(clusterUrl: string): string {
@@ -54,6 +82,11 @@ function restoreSchemaFromStore(target: KustoTarget): boolean {
     if (stored && stored.length > 0) {
         schemaCache.set(key, stored);
         foldersCache.set(key, [...new Set(stored.map((t) => t.folder))].filter(Boolean).sort());
+        // Best-effort raw restore — language service IntelliSense needs this.
+        const rawStored = stateService.get<RawShowSchema>('explorerCache', persistRawSchemaKey(target));
+        if (rawStored && rawStored.Databases) {
+            rawSchemaCache.set(key, rawStored);
+        }
         return true;
     }
     return false;
@@ -61,6 +94,10 @@ function restoreSchemaFromStore(target: KustoTarget): boolean {
 
 function persistSchema(target: KustoTarget, schema: SchemaTable[]): void {
     stateService.set('explorerCache', persistSchemaKey(target), schema);
+}
+
+function persistRawSchema(target: KustoTarget, raw: RawShowSchema): void {
+    stateService.set('explorerCache', persistRawSchemaKey(target), raw);
 }
 
 export function getPersistedDatabases(clusterUrl: string): string[] | null {
@@ -172,21 +209,25 @@ export async function loadSchema(client: KustoClient, target?: KustoTarget): Pro
         try {
             const result = await client.queryKustoMgmt<{ DatabaseSchema: string }>('.show database schema as json', effectiveTarget);
             if (result.rows.length > 0) {
-                const schemaJson = JSON.parse(result.rows[0].DatabaseSchema);
+                const schemaJson = JSON.parse(result.rows[0].DatabaseSchema) as RawShowSchema;
                 const dbName = Object.keys(schemaJson.Databases)[0];
                 const db = schemaJson.Databases[dbName] as KustoSchemaDb;
                 const parsed = parseSchema(db);
                 schemaCache.set(key, parsed);
                 foldersCache.set(key, [...new Set(parsed.map((t) => t.folder))].filter(Boolean).sort());
+                rawSchemaCache.set(key, schemaJson);
                 // Persist to IndexedDB
                 if (effectiveTarget) {
                     persistSchema(effectiveTarget, parsed);
+                    persistRawSchema(effectiveTarget, schemaJson);
                 }
                 // Also cache under the original target key if different
                 if (target && cacheKey(target) !== key) {
                     schemaCache.set(cacheKey(target), parsed);
                     foldersCache.set(cacheKey(target), [...new Set(parsed.map((t) => t.folder))].filter(Boolean).sort());
+                    rawSchemaCache.set(cacheKey(target), schemaJson);
                     persistSchema(target, parsed);
+                    persistRawSchema(target, schemaJson);
                 }
             } else {
                 schemaCache.set(key, []);
@@ -223,8 +264,10 @@ export async function reloadSchema(client: KustoClient, target?: KustoTarget): P
     const key = cacheKey(target);
     schemaCache.delete(key);
     foldersCache.delete(key);
+    rawSchemaCache.delete(key);
     if (target) {
         stateService.delete('explorerCache', persistSchemaKey(target));
+        stateService.delete('explorerCache', persistRawSchemaKey(target));
     }
     return loadSchema(client, target);
 }
@@ -245,6 +288,28 @@ export function getSchemaFolders(target?: KustoTarget): string[] {
         return cached;
     }
     return target ? [] : [];
+}
+
+/**
+ * Returns the raw `.show database schema as json` payload for the given target,
+ * if known. The payload's shape matches what `@kusto/monaco-kusto`'s
+ * `setSchemaFromShowSchema` accepts. Returns null when no schema has been
+ * loaded (or persisted) for this target.
+ */
+export function getRawShowSchema(target?: KustoTarget): RawShowSchema | null {
+    const key = cacheKey(target);
+    const cached = rawSchemaCache.get(key);
+    if (cached) {
+        return cached;
+    }
+    if (target) {
+        const persisted = stateService.get<RawShowSchema>('explorerCache', persistRawSchemaKey(target));
+        if (persisted && persisted.Databases) {
+            rawSchemaCache.set(key, persisted);
+            return persisted;
+        }
+    }
+    return null;
 }
 
 /** List databases on a Kusto cluster. Uses persistent cache; pass forceRefresh to bypass. */
@@ -268,27 +333,3 @@ export async function listDatabases(client: KustoClient, clusterUrl: string, for
         return [];
     }
 }
-
-// --- KQL language tokens (not from Kusto, always static) ---
-
-export const KQL_FUNCTIONS = [
-    'where', 'project', 'extend', 'summarize', 'count', 'take', 'top', 'order', 'sort',
-    'join', 'union', 'lookup', 'mv-expand', 'parse', 'evaluate',
-    'render', 'as', 'let', 'set', 'alias', 'restrict', 'pattern',
-];
-
-export const KQL_AGGREGATIONS = [
-    'count', 'countif', 'dcount', 'sum', 'sumif', 'avg', 'min', 'max',
-    'percentile', 'percentiles', 'stdev', 'variance', 'make_list', 'make_set',
-    'arg_max', 'arg_min', 'any', 'take_any',
-];
-
-export const KQL_SCALAR_FUNCTIONS = [
-    'ago', 'now', 'datetime', 'timespan', 'bin', 'floor', 'ceiling',
-    'strlen', 'substring', 'tolower', 'toupper', 'trim', 'replace',
-    'strcat', 'split', 'parse_json', 'tostring', 'toint', 'tolong', 'todouble', 'tobool',
-    'iif', 'iff', 'case', 'coalesce', 'isempty', 'isnotempty', 'isnull', 'isnotnull',
-    'format_datetime', 'datetime_diff', 'startofday', 'startofweek', 'startofmonth',
-    'round', 'abs', 'log', 'pow', 'sqrt',
-    'array_length', 'pack', 'bag_keys',
-];

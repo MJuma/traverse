@@ -66,7 +66,7 @@ Explorer (provider — colors, state, kusto contexts)
 └── ExplorerWorkspace (editor + results + sidebar)
     ├── EditorToolbar (run, format, connection picker)
     ├── TabBar → TabItem (query tabs)
-    ├── Monaco Editor (KQL via kqlLanguage.ts)
+    ├── Monaco Editor (KQL via @kusto/monaco-kusto)
     ├── SchemaSidebar → FolderRow, SchemaTableItem, SchemaColumnItem
     └── ResultsPanel → ResultsTable, ChartPanel
 ```

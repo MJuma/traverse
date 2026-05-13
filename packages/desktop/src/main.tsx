@@ -15,10 +15,13 @@ import type { ExplorerColorConfig } from '@mhjuma/traverse';
 import { authenticate, clearAuth } from './auth';
 import { AuthError } from './AuthError';
 import { AuthLoading } from './AuthLoading';
+import { configureAppMonacoWorkers } from './monacoWorkers';
 import { SettingsPage } from './SettingsPage';
 import { buildThemes, getPreset } from './themes';
 import { withNotifications } from './notifications';
 import type { ThemeMode } from './SettingsTheme';
+
+configureAppMonacoWorkers();
 
 const CLIENT_ID = 'c8dbda70-81cc-49e0-aa47-6133d7154fe3';
 const TENANT_ID = '72f988bf-86f1-41af-91ab-2d7cd011db47';
