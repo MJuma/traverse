@@ -6,6 +6,7 @@ import { Explorer } from './Explorer';
 
 vi.mock('@monaco-editor/react', () => ({
     Editor: () => React.createElement('div', { 'data-testid': 'monaco-editor' }),
+    loader: { config: vi.fn() },
 }));
 vi.mock('../../services/kusto', () => ({
     queryKusto: vi.fn().mockResolvedValue({ columns: [], rows: [] }),
@@ -85,10 +86,17 @@ vi.mock('../../state/persistence', () => ({
     validateAndCleanSnapshot: vi.fn(() => null),
     extractSnapshot: vi.fn((s: { tabs: unknown[]; activeTabId: string }) => ({ version: 1, tabs: s.tabs, activeTabId: s.activeTabId, splitEnabled: false, splitDirection: 'vertical', splitTabId: null, focusedPane: 'primary' })),
 }));
-vi.mock('../ExplorerWorkspace/kqlLanguage', () => ({
-    registerKqlLanguage: vi.fn(),
-    setKqlSchemaResolver: vi.fn(),
+vi.mock('../ExplorerWorkspace/bootstrapKustoLanguage', () => ({
+    bootstrapKustoLanguage: vi.fn().mockResolvedValue(undefined),
 }));
+vi.mock('../ExplorerWorkspace/kustoSchemaQueue', () => ({
+    applyKustoSchema: vi.fn(),
+}));
+// Stub `@kusto/monaco-kusto` — Vitest cannot resolve the real package
+// against jsdom (engine + worker globals are not available). Keeping the
+// stub minimal avoids unhandled-rejection noise from `kustoSchemaQueue`'s
+// dynamic import path.
+vi.mock('@kusto/monaco-kusto', () => ({ kustoDefaults: {}, getKustoWorker: () => Promise.resolve(() => Promise.resolve({})) }));
 vi.mock('@fluentui/react-components', () => ({
     Button: (p: Record<string, unknown>) => React.createElement('button', p, p['children'] as React.ReactNode),
     Tooltip: (p: Record<string, unknown>) => React.createElement('div', null, p['children'] as React.ReactNode),

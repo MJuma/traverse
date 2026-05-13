@@ -1,6 +1,6 @@
 {
     "name": "@mhjuma/traverse",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "private": false,
     "publishConfig": {
         "access": "public"
@@ -15,9 +15,8 @@
     "dependencies": {
         "@fluentui/react-components": "catalog:",
         "@fluentui/react-icons": "catalog:",
-        "@monaco-editor/react": "catalog:",
+        "@kusto/monaco-kusto": "catalog:",
         "@tanstack/react-virtual": "catalog:",
-        "monaco-editor": "catalog:",
         "react": "catalog:",
         "react-dom": "catalog:",
         "vega": "catalog:",
@@ -25,7 +24,9 @@
         "vega-tooltip": "catalog:"
     },
     "peerDependencies": {
-        "@azure/msal-browser": ">=3.0.0"
+        "@azure/msal-browser": ">=3.0.0",
+        "@monaco-editor/react": "catalog:",
+        "monaco-editor": "catalog:"
     },
     "peerDependenciesMeta": {
         "@azure/msal-browser": {
@@ -34,6 +35,8 @@
     },
     "devDependencies": {
         "@azure/msal-browser": "catalog:development",
+        "@monaco-editor/react": "catalog:",
+        "monaco-editor": "catalog:",
         "@types/react": "catalog:development",
         "@types/react-dom": "catalog:development",
         "oxlint": "catalog:development",

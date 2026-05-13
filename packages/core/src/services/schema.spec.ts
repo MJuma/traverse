@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-import { parseSchema, loadSchema, reloadSchema, getSchema, getSchemaFolders, listDatabases, getPersistedDatabases, persistDatabases, KQL_FUNCTIONS, KQL_AGGREGATIONS, KQL_SCALAR_FUNCTIONS } from './schema';
-import type { KustoSchemaDb } from './schema';
+import { parseSchema, loadSchema, reloadSchema, getSchema, getSchemaFolders, getRawShowSchema, listDatabases, getPersistedDatabases, persistDatabases } from './schema';
+import type { KustoSchemaDb, RawShowSchema } from './schema';
 import type { KustoClient } from './kusto';
 
 const mockStore = new Map<string, unknown>();
@@ -364,32 +364,6 @@ describe('getSchemaFolders', () => {
     });
 });
 
-describe('KQL constants', () => {
-    it('KQL_FUNCTIONS contains expected keywords', () => {
-        expect(KQL_FUNCTIONS).toContain('where');
-        expect(KQL_FUNCTIONS).toContain('project');
-        expect(KQL_FUNCTIONS).toContain('summarize');
-        expect(KQL_FUNCTIONS).toContain('join');
-        expect(KQL_FUNCTIONS).toContain('union');
-    });
-
-    it('KQL_AGGREGATIONS contains expected functions', () => {
-        expect(KQL_AGGREGATIONS).toContain('count');
-        expect(KQL_AGGREGATIONS).toContain('sum');
-        expect(KQL_AGGREGATIONS).toContain('avg');
-        expect(KQL_AGGREGATIONS).toContain('dcount');
-        expect(KQL_AGGREGATIONS).toContain('percentile');
-    });
-
-    it('KQL_SCALAR_FUNCTIONS contains expected functions', () => {
-        expect(KQL_SCALAR_FUNCTIONS).toContain('ago');
-        expect(KQL_SCALAR_FUNCTIONS).toContain('now');
-        expect(KQL_SCALAR_FUNCTIONS).toContain('strlen');
-        expect(KQL_SCALAR_FUNCTIONS).toContain('iif');
-        expect(KQL_SCALAR_FUNCTIONS).toContain('parse_json');
-    });
-});
-
 describe('per-cluster schema', () => {
     it('getSchema returns empty for unknown target', () => {
         const schema = getSchema({ clusterUrl: 'https://unknown.kusto.windows.net', database: 'UnknownDB' });
@@ -614,5 +588,110 @@ describe('listDatabases with forceRefresh', () => {
 
         await listDatabases(client, clusterUrl, true);
         expect(getPersistedDatabases(clusterUrl)).toEqual(['NewDB']);
+    });
+});
+
+describe('getRawShowSchema', () => {
+    it('returns the raw .show schema payload that loadSchema captured', async () => {
+        const mockDb: KustoSchemaDb = {
+            Tables: {
+                RawTable: { Folder: 'Raw', OrderedColumns: [{ Name: 'X', CslType: 'long' }] },
+            },
+        };
+        const raw: RawShowSchema = { Plugins: [], Databases: { rawdb: mockDb as never } };
+        const client = createMockClient({
+            rows: [{ DatabaseSchema: JSON.stringify(raw) }],
+            columns: [],
+        });
+        const target = { clusterUrl: 'https://raw.kusto.windows.net', database: 'rawdb' };
+
+        await reloadSchema(client, target);
+
+        const result = getRawShowSchema(target);
+        expect(result).not.toBeNull();
+        expect(result?.Databases['rawdb']).toBeDefined();
+        expect(result?.Plugins).toEqual([]);
+    });
+
+    it('returns null when no schema has been loaded for the target', () => {
+        const target = { clusterUrl: 'https://never-loaded.kusto.windows.net', database: 'x' };
+        expect(getRawShowSchema(target)).toBeNull();
+    });
+
+    it('restores the raw payload from persistent storage when in-memory is empty', () => {
+        const mockDb: KustoSchemaDb = {
+            Tables: { PersistedTable: { OrderedColumns: [] } },
+        };
+        const raw: RawShowSchema = { Plugins: [], Databases: { persistdb: mockDb as never } };
+        const target = { clusterUrl: 'https://restore.kusto.windows.net', database: 'persistdb' };
+
+        // Seed the persistent store directly, simulating a prior session writing
+        // raw-schema:<cluster>|<db>. No prior in-memory load for this target.
+        mockStore.set(`raw-schema:${target.clusterUrl}|${target.database}`, raw);
+
+        const result = getRawShowSchema(target);
+        expect(result).not.toBeNull();
+        expect(result?.Databases['persistdb']).toBeDefined();
+        // Second call should hit the warmed in-memory cache (still equal payload).
+        expect(getRawShowSchema(target)).toBe(result);
+    });
+
+    it('persists raw payload under both target and effectiveTarget cache keys when auto-discovering', async () => {
+        const mockDb: KustoSchemaDb = {
+            Tables: { AutoDiscoveredTable: { OrderedColumns: [] } },
+        };
+        const raw: RawShowSchema = { Plugins: [], Databases: { autodb: mockDb as never } };
+        const clusterUrl = 'https://auto.kusto.windows.net';
+        // Mgmt query #1 (auto-discovery): list databases; returns one db.
+        // Mgmt query #2: schema for that db.
+        const queryKustoMgmt = vi.fn()
+            .mockResolvedValueOnce({ rows: [{ DatabaseName: 'autodb' }], columns: [] })
+            .mockResolvedValueOnce({ rows: [{ DatabaseSchema: JSON.stringify(raw) }], columns: [] });
+        const client: KustoClient = {
+            queryKusto: vi.fn(),
+            queryKustoMgmt,
+            clearQueryCache: vi.fn(),
+            getQueryCacheSize: vi.fn().mockReturnValue(0),
+        };
+        const originalTarget = { clusterUrl, database: '' };
+
+        await reloadSchema(client, originalTarget);
+
+        // Raw payload retrievable under the original (empty-db) target.
+        expect(getRawShowSchema(originalTarget)).not.toBeNull();
+        // …and under the effective target after auto-discovery.
+        expect(getRawShowSchema({ clusterUrl, database: 'autodb' })).not.toBeNull();
+    });
+
+    it('clears the raw cache on reloadSchema', async () => {
+        const mockDb: KustoSchemaDb = {
+            Tables: { ClearedTable: { OrderedColumns: [] } },
+        };
+        const raw: RawShowSchema = { Plugins: [], Databases: { cleardb: mockDb as never } };
+        const target = { clusterUrl: 'https://clear.kusto.windows.net', database: 'cleardb' };
+
+        const client = createMockClient({
+            rows: [{ DatabaseSchema: JSON.stringify(raw) }],
+            columns: [],
+        });
+
+        await reloadSchema(client, target);
+        expect(getRawShowSchema(target)).not.toBeNull();
+
+        // Reload with a client that returns a brand-new payload; the old one
+        // should not be retained.
+        const newRaw: RawShowSchema = { Plugins: [], Databases: { cleardb: { Tables: { NewTable: {} } } as never } };
+        const client2 = createMockClient({
+            rows: [{ DatabaseSchema: JSON.stringify(newRaw) }],
+            columns: [],
+        });
+        await reloadSchema(client2, target);
+
+        const result = getRawShowSchema(target);
+        expect(result?.Databases['cleardb']).toBeDefined();
+        // Verify the new payload took the place of the old one (different Tables key).
+        const tables = (result?.Databases['cleardb'] as { Tables: Record<string, unknown> } | undefined)?.Tables;
+        expect(tables && 'NewTable' in tables).toBe(true);
+        expect(tables && 'ClearedTable' in tables).toBe(false);
     });
 });

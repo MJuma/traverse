@@ -1,5 +1,12 @@
 # traverse-desktop
 
+## 0.1.2
+
+### Patch Changes
+
+- Updated dependencies [57f602c]
+  - @mhjuma/traverse@0.3.0
+
 ## 0.1.1
 
 ### Patch Changes

@@ -5,9 +5,10 @@ import { createRoot } from 'react-dom/client';
 import { act } from 'react';
 import { ExplorerWorkspace } from './ExplorerWorkspace';
 
-import { loadSchema, getSchema } from '../../services/schema';
+import { loadSchema, getSchema, getRawShowSchema } from '../../services/schema';
 import { getHistory } from '../../services/queryHistory';
-import { registerKqlLanguage, setKqlSchemaResolver } from './kqlLanguage';
+import { bootstrapKustoLanguage } from './bootstrapKustoLanguage';
+import { applyKustoSchema } from './kustoSchemaQueue';
 import { saveActiveConnectionId } from './ExplorerWorkspace.logic';
 
 vi.mock('../EditorToolbar/EditorToolbar', () => ({
@@ -53,8 +54,18 @@ vi.mock('@monaco-editor/react', () => ({
                     getValue: () => 'TestTable | take 10',
                 };
                 const mockMonaco = {
-                    languages: { register: vi.fn(), setMonarchTokensProvider: vi.fn(), registerCompletionItemProvider: vi.fn() },
-                    editor: { defineTheme: vi.fn() },
+                    languages: {
+                        register: vi.fn(),
+                        setMonarchTokensProvider: vi.fn(),
+                        registerCompletionItemProvider: vi.fn(),
+                        getLanguages: vi.fn(() => [{ id: 'kusto' }]),
+                    },
+                    editor: {
+                        defineTheme: vi.fn(),
+                        setTheme: vi.fn(),
+                        getModels: vi.fn(() => []),
+                        onDidCreateModel: vi.fn(() => ({ dispose: vi.fn() })),
+                    },
                     KeyMod: { CtrlCmd: 2048, Shift: 1024, Alt: 512 },
                     KeyCode: { Enter: 3, KeyR: 48, KeyF: 36 },
                 };
@@ -114,6 +125,7 @@ vi.mock('../../services/queryHistory', () => ({
 vi.mock('../../services/schema', () => ({
     getSchema: vi.fn().mockReturnValue([]),
     loadSchema: vi.fn().mockResolvedValue(undefined),
+    getRawShowSchema: vi.fn().mockReturnValue(null),
 }));
 vi.mock('./ExplorerWorkspace.logic', () => ({
     formatKql: (s: string) => s,
@@ -154,9 +166,11 @@ vi.mock('./ExplorerWorkspace.logic', () => ({
 vi.mock('./ExplorerWorkspace.styles', () => ({
     useExplorerStyles: () => new Proxy({}, { get: (_, p) => String(p) }),
 }));
-vi.mock('./kqlLanguage', () => ({
-    registerKqlLanguage: vi.fn(),
-    setKqlSchemaResolver: vi.fn(),
+vi.mock('./bootstrapKustoLanguage', () => ({
+    bootstrapKustoLanguage: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('./kustoSchemaQueue', () => ({
+    applyKustoSchema: vi.fn(),
 }));
 
 
@@ -378,13 +392,14 @@ describe('ExplorerWorkspace', () => {
         expect(getHistory).toHaveBeenCalled();
     });
 
-    // --- Injects run-highlight CSS on mount ---
-    it('injects traverse-run-highlight style element', () => {
+    // --- No custom run-highlight CSS on mount ---
+    it('does not inject the legacy traverse-run-highlight style element', () => {
         act(() => { root.render(React.createElement(ExplorerWorkspace, defaultProps)); });
 
+        // monaco-kusto's built-in KustoCommandHighlighter replaces our custom
+        // block decoration; the global style element must no longer be added.
         const styleEl = document.getElementById('traverse-run-highlight-style');
-        expect(styleEl).toBeTruthy();
-        expect(styleEl?.textContent).toContain('traverse-run-highlight');
+        expect(styleEl).toBeFalsy();
     });
 
     // --- DragOver on primary editor ---
@@ -418,16 +433,37 @@ describe('ExplorerWorkspace', () => {
         expect(toolbar?.getAttribute('data-show-cancel')).toBe('false');
     });
 
-    // --- setKqlSchemaResolver called ---
-    it('sets KQL schema resolver on mount', () => {
+    // --- applyKustoSchema called when schema available ---
+    it('pushes schema to the Kusto worker on mount when schema is cached', () => {
+        const fakeRaw = { Plugins: [], Databases: { DB: { Name: 'DB', Tables: {}, Functions: {} } } };
+        vi.mocked(getRawShowSchema).mockReturnValue(fakeRaw as unknown as ReturnType<typeof getRawShowSchema>);
         act(() => { root.render(React.createElement(ExplorerWorkspace, defaultProps)); });
-        expect(setKqlSchemaResolver).toHaveBeenCalled();
+        expect(applyKustoSchema).toHaveBeenCalled();
+        const call = vi.mocked(applyKustoSchema).mock.calls.at(-1)?.[0];
+        expect(call?.raw).toBe(fakeRaw);
+        expect(call?.clusterUri).toBe('https://test.kusto.windows.net');
+        expect(call?.dbName).toBe('DB');
+        expect(call?.monaco).toBeTruthy();
+        vi.mocked(getRawShowSchema).mockReturnValue(null);
     });
 
-    // --- registerKqlLanguage called ---
-    it('registers KQL language on editor mount', () => {
+    // --- bootstrapKustoLanguage called on editor mount ---
+    it('bootstraps the Kusto language on editor mount', () => {
         act(() => { root.render(React.createElement(ExplorerWorkspace, defaultProps)); });
-        expect(registerKqlLanguage).toHaveBeenCalled();
+        expect(bootstrapKustoLanguage).toHaveBeenCalled();
+        // Bootstrap receives the same Monaco instance the editor was given —
+        // this is the contract the schema queue relies on to apply settings
+        // and themes against the right Monaco copy.
+        const bootstrapArg = vi.mocked(bootstrapKustoLanguage).mock.calls[0]?.[0];
+        expect(bootstrapArg).toBeTruthy();
+    });
+
+    // --- no schema push when raw schema is not yet cached ---
+    it('does not push schema when getRawShowSchema returns null', () => {
+        vi.mocked(getRawShowSchema).mockReturnValue(null);
+        vi.mocked(applyKustoSchema).mockClear();
+        act(() => { root.render(React.createElement(ExplorerWorkspace, defaultProps)); });
+        expect(applyKustoSchema).not.toHaveBeenCalled();
     });
 
     // --- saveActiveConnectionId called ---

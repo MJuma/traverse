@@ -1,6 +1,6 @@
 {
     "name": "traverse-web",
-    "version": "0.1.1",
+    "version": "0.1.2",
     "private": true,
     "type": "module",
     "scripts": {
@@ -9,9 +9,12 @@
         "lint": "oxlint -c ../../oxlintrc.react.json --tsconfig tsconfig.lint.json --type-aware src/"
     },
     "dependencies": {
-        "@mhjuma/traverse": "workspace:*",
         "@azure/msal-browser": "catalog:",
         "@fluentui/react-components": "catalog:",
+        "@kusto/monaco-kusto": "catalog:",
+        "@mhjuma/traverse": "workspace:*",
+        "@monaco-editor/react": "catalog:",
+        "monaco-editor": "catalog:",
         "react": "catalog:",
         "react-dom": "catalog:"
     },
@@ -20,10 +23,11 @@
         "@types/react": "catalog:development",
         "@types/react-dom": "catalog:development",
         "@vitejs/plugin-react-swc": "catalog:development",
+        "esbuild": "catalog:development",
         "oxlint": "catalog:development",
         "oxlint-tsgolint": "catalog:development",
         "typescript": "catalog:development",
         "vite": "catalog:development",
-        "esbuild": "catalog:development"
+        "vite-plugin-node-polyfills": "^0.26.0"
     }
 }

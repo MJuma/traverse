@@ -11,6 +11,7 @@ import type { ExplorerTabsSnapshot } from '../../state/persistence';
 import { DEFAULT_QUERY, buildWellKnownClusters } from '../ExplorerWorkspace/ExplorerWorkspace.logic';
 import type { WellKnownCluster } from '../ExplorerWorkspace/ExplorerWorkspace.logic';
 import { ExplorerWorkspace } from '../ExplorerWorkspace/ExplorerWorkspace';
+import { preloadKustoLanguage } from '../ExplorerWorkspace/monacoLoader';
 
 export interface ExplorerProps {
     className?: string;
@@ -35,6 +36,12 @@ export interface ExplorerProps {
 const SNAPSHOT_SAVE_DEBOUNCE_MS = 300;
 
 export function Explorer(props: ExplorerProps) {
+    // Trigger kusto language preload on first Explorer render. Editor-gated
+    // by design (here, not at module load) so consumers using only
+    // non-editor APIs from `@mhjuma/traverse` don't pay the kusto chunk cost.
+    // Idempotent — internally guarded so subsequent renders are no-ops.
+    preloadKustoLanguage();
+
     const { initialQuery: providedInitialQuery } = props;
 
     const { initialQuery, hasUrlQuery } = useMemo(() => {
@@ -99,6 +106,10 @@ export function Explorer(props: ExplorerProps) {
             flush();
         };
     }, [hasUrlQuery]);
+
+    // The Kusto language is pre-bootstrapped in monacoLoader.ts at module
+    // load time so the editor's first paint already has Monarch tokens and
+    // themes registered. No idle-callback prefetch needed here.
 
     return (
         <KustoClientContext.Provider value={props.kustoClient}>

@@ -1,6 +1,6 @@
 {
     "name": "traverse-desktop",
-    "version": "0.1.1",
+    "version": "0.1.2",
     "private": true,
     "type": "module",
     "scripts": {
@@ -12,13 +12,16 @@
         "lint": "oxlint -c ../../oxlintrc.react.json --tsconfig tsconfig.lint.json --type-aware src/"
     },
     "dependencies": {
-        "@mhjuma/traverse": "workspace:*",
         "@fluentui/react-components": "catalog:",
         "@fluentui/react-icons": "catalog:",
+        "@kusto/monaco-kusto": "catalog:",
+        "@mhjuma/traverse": "workspace:*",
+        "@monaco-editor/react": "catalog:",
         "@tauri-apps/api": "catalog:",
         "@tauri-apps/plugin-notification": "catalog:",
         "@tauri-apps/plugin-store": "catalog:",
         "@tauri-apps/plugin-updater": "catalog:",
+        "monaco-editor": "catalog:",
         "react": "catalog:",
         "react-dom": "catalog:"
     },
@@ -28,10 +31,11 @@
         "@types/react": "catalog:development",
         "@types/react-dom": "catalog:development",
         "@vitejs/plugin-react-swc": "catalog:development",
+        "esbuild": "catalog:development",
         "oxlint": "catalog:development",
         "oxlint-tsgolint": "catalog:development",
         "typescript": "catalog:development",
         "vite": "catalog:development",
-        "esbuild": "catalog:development"
+        "vite-plugin-node-polyfills": "^0.26.0"
     }
 }

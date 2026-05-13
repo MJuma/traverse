@@ -3,11 +3,10 @@ import type { Monaco } from '@monaco-editor/react';
 import type { editor } from 'monaco-editor';
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 
-import { useExplorerColors } from '../../context/ExplorerColorContext';
 import type { KustoTarget } from '../../services/kusto';
 import { normalizeQuery, getHistory, saveHistoryEntry, recallResult } from '../../services/queryHistory';
 import type { QueryHistoryEntry } from '../../services/queryHistory';
-import { getSchema, loadSchema } from '../../services/schema';
+import { getSchema, loadSchema, getRawShowSchema } from '../../services/schema';
 import { EditorToolbar } from '../EditorToolbar/EditorToolbar';
 import { ResultsPanel } from '../ResultsPanel/ResultsPanel';
 import { SchemaSidebar } from '../SchemaSidebar/SchemaSidebar';
@@ -26,7 +25,8 @@ import {
 import { useExplorerStyles } from './ExplorerWorkspace.styles';
 import type { ExplorerProps } from '../Explorer/Explorer';
 import { useKustoClient } from '../../context/KustoClientContext';
-import { registerKqlLanguage, setKqlSchemaResolver } from './kqlLanguage';
+import { bootstrapKustoLanguage } from './bootstrapKustoLanguage';
+import { applyKustoSchema } from './kustoSchemaQueue';
 
 
 const positionRelativeStyle = { position: 'relative' as const } as const;
@@ -38,12 +38,15 @@ const editorOptions = {
     overviewRulerBorder: false, padding: { top: 4, bottom: 4 }, lineDecorationsWidth: 8,
     glyphMargin: false, folding: false,
     dropIntoEditor: { enabled: false },
+    // monaco-kusto exposes semantic-token-based highlighting (columns,
+    // functions, tables distinguished by AST role). Enable it explicitly —
+    // Monaco's default for standalone editors is false.
+    'semanticHighlighting.enabled': true,
 } as const;
 
 export function ExplorerWorkspace(props: ExplorerProps) {
     const styles = useExplorerStyles();
     const { isDark = false } = props;
-    const explorerColors = useExplorerColors();
     const client = useKustoClient();
     const state = useExplorerState();
     const dispatch = useExplorerDispatch();
@@ -115,9 +118,8 @@ export function ExplorerWorkspace(props: ExplorerProps) {
     );
 
     useEffect(() => {
-        setKqlSchemaResolver(() => getSchema(focusedTarget));
         saveActiveConnectionId(focusedConn.id);
-    }, [focusedConn.id, focusedTarget]);
+    }, [focusedConn.id]);
 
     // Setter shims — dispatch to reducer, keep same call signatures for existing callbacks
     const setHasSelection = useCallback((v: boolean) => dispatch({ type: 'SET_HAS_SELECTION', hasSelection: v }), [dispatch]);
@@ -133,14 +135,66 @@ export function ExplorerWorkspace(props: ExplorerProps) {
     // --- Editor refs (primary + secondary for split) ---
     const primaryEditorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
     const secondaryEditorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
-    const primaryDecorationsRef = useRef<editor.IEditorDecorationsCollection | null>(null);
-    const secondaryDecorationsRef = useRef<editor.IEditorDecorationsCollection | null>(null);
+    // Monaco instance is captured at first editor mount. Stored in state (not
+    // a ref) so the schema-push effect re-runs when it becomes available.
+    const [monacoInstance, setMonacoInstance] = useState<Monaco | null>(null);
+    // Track when monaco-kusto's themed token colors (`kusto-light` /
+    // `kusto-dark`) have been registered. Before bootstrap resolves, those
+    // theme names don't exist yet — passing them as the Editor's `theme`
+    // prop on first mount makes Monaco silently fall back to the default
+    // `vs` (light) theme, which causes a brief white flash for dark-mode
+    // users on first paint. We render with the built-in `vs-dark` / `vs`
+    // theme until bootstrap completes, then swap to the kusto themes.
+    const [kustoThemeReady, setKustoThemeReady] = useState(false);
     const runQueryRef = useRef<() => void>(() => {});
     const recallQueryRef = useRef<() => void>(() => {});
     const containerRef = useRef<HTMLDivElement | null>(null);
     const isDragging = useRef(false);
     const historyKeysRef = useRef<Set<string>>(new Set());
     const abortRef = useRef<AbortController | null>(null);
+
+    // Push the latest schema to the Kusto language worker whenever connection
+    // or schema changes. Debounce + identity-skip live in the queue.
+    useEffect(() => {
+        const monaco = monacoInstance;
+        if (!monaco) {
+            return;
+        }
+        const raw = getRawShowSchema(focusedTarget);
+        if (!raw) {
+            return;
+        }
+        applyKustoSchema({
+            monaco,
+            raw,
+            clusterUri: focusedTarget.clusterUrl,
+            dbName: focusedTarget.database,
+        });
+    }, [monacoInstance, focusedTarget, schema]);
+
+    // Apply monaco-kusto's themed token colors once the language plugin has
+    // registered its themes (`kusto-light` / `kusto-dark`). Until bootstrap
+    // resolves we render with the built-in `vs` / `vs-dark` theme via the
+    // `effectiveTheme` prop below to avoid the white-flash described where
+    // `kustoThemeReady` is declared.
+    useEffect(() => {
+        const monaco = monacoInstance;
+        if (!monaco) {
+            return;
+        }
+        let cancelled = false;
+        void bootstrapKustoLanguage(monaco).then(() => {
+            if (cancelled) {
+                return;
+            }
+            setKustoThemeReady(true);
+        }).catch(() => { /* bootstrap errors surface elsewhere */ });
+        return () => { cancelled = true; };
+    }, [monacoInstance]);
+
+    const effectiveTheme = kustoThemeReady
+        ? (isDark ? 'kusto-dark' : 'kusto-light')
+        : (isDark ? 'vs-dark' : 'vs');
 
     // Convenience: the focused editor
     const getFocusedEditor = useCallback(() => {
@@ -167,49 +221,6 @@ export function ExplorerWorkspace(props: ExplorerProps) {
         if (!toRun) { setCanRecall(false); return; }
         setCanRecall(historyKeysRef.current.has(normalizeQuery(toRun.query)));
     }, [setCanRecall]);
-
-    const updateStatementHighlight = useCallback((ed: editor.IStandaloneCodeEditor) => {
-        const decRef = ed === primaryEditorRef.current ? primaryDecorationsRef : secondaryDecorationsRef;
-        if (!decRef.current) {
-            return;
-        }
-        const selection = ed.getSelection();
-        // When the user has an explicit selection, don't show the block highlight
-        if (selection && !selection.isEmpty()) {
-            decRef.current.set([]);
-            checkCanRecall(ed);
-            return;
-        }
-        const model = ed.getModel();
-        if (!model) {
-            return;
-        }
-        const cursorLine = ed.getPosition()?.lineNumber ?? 1;
-        const totalLines = model.getLineCount();
-
-        let startLine = cursorLine;
-        while (startLine > 1 && model.getLineContent(startLine - 1).trim() !== '') {
-            startLine--;
-        }
-        let endLine = cursorLine;
-        while (endLine < totalLines && model.getLineContent(endLine + 1).trim() !== '') {
-            endLine++;
-        }
-
-        decRef.current.set([{
-            range: {
-                startLineNumber: startLine,
-                startColumn: 1,
-                endLineNumber: endLine,
-                endColumn: model.getLineMaxColumn(endLine),
-            },
-            options: {
-                isWholeLine: true,
-                className: 'traverse-run-highlight',
-            },
-        }]);
-        checkCanRecall(ed);
-    }, [checkCanRecall]);
 
     const cancelQuery = useCallback(() => {
         abortRef.current?.abort();
@@ -317,10 +328,14 @@ export function ExplorerWorkspace(props: ExplorerProps) {
     const createEditorMountHandler = useCallback((pane: 'primary' | 'secondary') => {
         return (ed: editor.IStandaloneCodeEditor, monaco: Monaco) => {
             const edRef = pane === 'primary' ? primaryEditorRef : secondaryEditorRef;
-            const decRef = pane === 'primary' ? primaryDecorationsRef : secondaryDecorationsRef;
             edRef.current = ed;
-            decRef.current = ed.createDecorationsCollection([]);
-            registerKqlLanguage(monaco);
+            setMonacoInstance(monaco);
+            // Kick off the @kusto/monaco-kusto bootstrap; fire-and-forget — the
+            // schema queue awaits this internally before applying schema.
+            // monaco-kusto also installs its own KustoCommandHighlighter, which
+            // visually marks the current command (delimited by blank lines) —
+            // that replaces our previous custom decoration.
+            void bootstrapKustoLanguage(monaco);
             ed.addAction({
                 id: 'run-query',
                 label: 'Run Query',
@@ -340,34 +355,23 @@ export function ExplorerWorkspace(props: ExplorerProps) {
                 run: () => { formatQueryRef.current(); },
             });
 
-            ed.onDidChangeCursorPosition(() => updateStatementHighlight(ed));
+            ed.onDidChangeCursorPosition(() => checkCanRecall(ed));
             ed.onDidChangeCursorSelection((e) => {
                 setHasSelection(!e.selection.isEmpty());
-                updateStatementHighlight(ed);
+                checkCanRecall(ed);
             });
-            ed.onDidChangeModelContent(() => updateStatementHighlight(ed));
+            ed.onDidChangeModelContent(() => checkCanRecall(ed));
             ed.onDidFocusEditorWidget(() => setFocusedPane(pane));
 
-            updateStatementHighlight(ed);
+            checkCanRecall(ed);
             if (pane === 'primary') {
                 ed.focus();
             }
         };
-    }, [updateStatementHighlight, setHasSelection, setFocusedPane]);
+    }, [checkCanRecall, setHasSelection, setFocusedPane]);
 
     useEffect(() => { runQueryRef.current = runQuery; }, [runQuery]);
     useEffect(() => { recallQueryRef.current = doRecall; }, [doRecall]);
-
-    // Inject global CSS for the run-highlight decoration (Monaco needs a real class)
-    useEffect(() => {
-        const id = 'traverse-run-highlight-style';
-        if (!document.getElementById(id)) {
-            const style = document.createElement('style');
-            style.id = id;
-            style.textContent = `.traverse-run-highlight { background-color: ${explorerColors.semantic.selectionBg}; transition: background-color 0.3s ease; }`;
-            document.head.appendChild(style);
-        }
-    }, [explorerColors.semantic.selectionBg]);
 
     const insertText = useCallback((text: string) => {
         const ed = getFocusedEditor();
@@ -595,8 +599,8 @@ export function ExplorerWorkspace(props: ExplorerProps) {
                         )}
                         <Editor
                             height="100%"
-                            language="kql"
-                            theme={isDark ? 'vs-dark' : 'vs'}
+                            language="kusto"
+                            theme={effectiveTheme}
                             value={activeTab.kql}
                             onChange={handlePrimaryEditorChange}
                             onMount={handlePrimaryMount}
@@ -615,8 +619,8 @@ export function ExplorerWorkspace(props: ExplorerProps) {
                                 onKeyDown={focusSecondaryPaneKeyDown}>
                                 <Editor
                                     height="100%"
-                                    language="kql"
-                                    theme={isDark ? 'vs-dark' : 'vs'}
+                                    language="kusto"
+                                    theme={effectiveTheme}
                                     value={splitTab.kql}
                                     onChange={handleSecondaryEditorChange}
                                     onMount={handleSecondaryMount}

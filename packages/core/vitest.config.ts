@@ -1,6 +1,12 @@
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+    optimizeDeps: {
+        include: ['monaco-editor'],
+    },
+    resolve: {
+        mainFields: ['module', 'jsnext:main', 'jsnext', 'main', 'browser'],
+    },
     test: {
         globals: false,
         environment: 'jsdom',
@@ -8,6 +14,7 @@ export default defineConfig({
         exclude: ['**/node_modules/**', '**/.{idea,git,cache,output,temp}/**'],
         passWithNoTests: false,
         retry: 0,
+        setupFiles: ['./src/test-setup.ts'],
         typecheck: {
             enabled: true,
             tsconfig: 'tsconfig.spec.json',
