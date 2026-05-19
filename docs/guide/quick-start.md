@@ -29,28 +29,98 @@ pnpm test:core
 pnpm lint
 ```
 
-## Using traverse-core in your app
+## Using @mhjuma/traverse in your app
 
-Install the package:
+Install the package and its peer dependencies. For Vite hosts also install
+`vite-plugin-node-polyfills` (used in Step 2 below):
 
 ```bash
-pnpm add traverse-core
+pnpm add @mhjuma/traverse monaco-editor@0.52 @monaco-editor/react @kusto/monaco-kusto
+pnpm add -D vite-plugin-node-polyfills
 ```
 
-### Basic embedding
+> `monaco-editor` must be pinned to `0.52.x` until `@kusto/monaco-kusto`
+> publishes a release compatible with `0.55+` (the worker API changed there
+> in ways that break the kusto language plugin's `createWebWorker` integration).
+> The traverse package's `peerDependencies` declares `monaco-editor: ^0.52.0`
+> so pnpm will warn if you install an incompatible version.
+
+### Step 1: Wire Monaco workers (one source file)
+
+Create `src/monacoWorkers.ts` and side-effect import it from wherever
+`<Explorer>` is mounted:
+
+```ts
+// src/monacoWorkers.ts
+import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker.js?worker';
+import KustoWorker from '@kusto/monaco-kusto/release/esm/kusto.worker.js?worker';
+import { configureTraverseMonacoWorkers } from '@mhjuma/traverse';
+
+configureTraverseMonacoWorkers({
+    getEditorWorker: () => new EditorWorker(),
+    getKustoWorker: () => new KustoWorker(),
+});
+```
 
 ```tsx
-import { Explorer, createKustoClient, KustoClientContext, configureTraverseMonacoWorkers } from 'traverse-core';
-import type { ExplorerColorConfig } from 'traverse-core';
+// src/App.tsx (or wherever you mount Explorer)
+import './monacoWorkers';
+import { Explorer } from '@mhjuma/traverse';
+// ...
+```
+
+This boilerplate has to live in your own source tree — Vite's `?worker`
+import suffix is bundler-specific and doesn't work when shipped from a
+`node_modules` package (Vite's dep optimizer can't bundle `?worker` imports
+inside a dependency).
+
+> If you forget this step, `<Explorer>` won't render the editor — it shows
+> an actionable placeholder banner with the exact snippet you need.
+> Configure once, banner goes away.
+
+### Step 2: Configure Vite (`vite.config.ts`)
+
+```ts
+import { defineConfig } from 'vite';
+import { nodePolyfills } from 'vite-plugin-node-polyfills';
+import { traverseVitePlugin } from '@mhjuma/traverse/vite-plugin';
+
+export default defineConfig({
+    plugins: [
+        /* ...your plugins... */
+        // `@kusto/language-service` references Node globals (Buffer, process).
+        // Without these polyfills the kusto worker fails to evaluate.
+        nodePolyfills({ overrides: { fs: null } }),
+        // Bridge.NET CJS shim + `optimizeDeps.include` for the kusto worker
+        // entries and their transitive CJS sub-deps.
+        traverseVitePlugin(),
+    ],
+});
+```
+
+`@mhjuma/traverse/vite-plugin` exports a single function that:
+
+- **Pre-bundles the kusto worker's transitive CJS deps** (`xregexp` and the
+  four Bridge.NET IIFEs) via `optimizeDeps.include`. Vite's dep scanner only
+  walks the main-thread import graph in dev — worker import chains are NOT
+  followed, so without this they're served as raw CJS and fail to evaluate
+  as ES modules inside the worker.
+
+- **Patches the Bridge.NET IIFEs with a CJS-context shim** so they route
+  globals to `globalThis` instead of throwing `TypeError: Cannot set
+  properties of undefined` in strict ESM context.
+
+`vite-plugin-node-polyfills` stays a separate plugin so you can tune the
+polyfill set without forking the traverse plugin.
+
+### Step 3: Mount the Explorer
+
+```tsx
+import { Explorer, createKustoClient, KustoClientContext, stateService } from '@mhjuma/traverse';
+import type { ExplorerColorConfig } from '@mhjuma/traverse';
 import { FluentProvider, webDarkTheme } from '@fluentui/react-components';
 
-// Wire up Monaco workers BEFORE mounting Explorer. With Vite:
-import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker.js?worker';
-import kustoWorker from '@kusto/monaco-kusto/release/esm/kusto.worker.js?worker';
-configureTraverseMonacoWorkers({
-    getEditorWorker: () => new editorWorker(),
-    getKustoWorker: () => new kustoWorker(),
-});
+import './monacoWorkers';
 
 const colors: ExplorerColorConfig = {
     semantic: {
@@ -98,10 +168,12 @@ function App() {
 
 ### Using bootstrapExplorer
 
-For standalone apps with MSAL authentication, use the `bootstrapExplorer` helper:
+For standalone apps with MSAL authentication, use the `bootstrapExplorer`
+helper. Don't forget to side-effect import `./monacoWorkers` first:
 
 ```tsx
-import { bootstrapExplorer } from 'traverse-core';
+import './monacoWorkers';
+import { bootstrapExplorer } from '@mhjuma/traverse';
 
 bootstrapExplorer({
     msalClientId: 'your-client-id',
@@ -112,106 +184,25 @@ bootstrapExplorer({
 });
 ```
 
-This handles MSAL initialization, redirect auth flow, StateService hydration, theme management, and renders the Explorer into `#root`.
+This handles MSAL initialization (popup + redirect post-back via the MSAL
+redirect bridge), StateService hydration, theme management, and renders
+the Explorer into `#root`.
 
-## Monaco peer dependencies
+## Non-Vite bundlers
 
-`traverse-core` ships KQL IntelliSense via the official `@kusto/monaco-kusto`
-language service, which runs the Kusto.Language engine in a Web Worker. To
-ensure a single Monaco instance is shared across the editor and the language
-plugin, `monaco-editor` and `@monaco-editor/react` are declared as **peer
-dependencies** — your host app must install them at compatible versions:
+For Webpack, Next.js, or other non-Vite bundlers, you still call
+`configureTraverseMonacoWorkers` from `monacoWorkers.ts` — just use your
+bundler's worker emitter to construct the workers. The
+`@mhjuma/traverse/vite-plugin` is Vite-only; non-Vite bundlers need an
+equivalent build-time integration to:
 
-```bash
-pnpm add monaco-editor@0.52.2 @monaco-editor/react @kusto/monaco-kusto
-```
-
-> `monaco-editor` must be pinned to `0.52.x` until `@kusto/monaco-kusto`
-> publishes a release that supports the strict `exports` map introduced in
-> `0.55+`.
-
-### Workers in non-Vite hosts
-
-For Webpack, Next.js, or other non-Vite bundlers, call
-`configureTraverseMonacoWorkers` with bundler-specific worker constructors
-before any editor mounts. The Vite recipe shown above is the most common; for
-Webpack, use the `worker-loader` package or your bundler's worker emitter to
-return a `Worker` instance from the factory callbacks.
-
-### Vite dev-mode setup
-
-`@kusto/monaco-kusto`'s worker entry has two quirks that bite hard in
-Vite's dev server (production builds via Rollup are unaffected):
-
-1. **CommonJS deps in the worker import chain.** Vite's dep optimizer only
-   auto-scans the main-thread import graph, so `xregexp` and the four
-   Bridge.NET IIFE scripts (`bridge.min`, `Kusto.JavaScript.Client.min`,
-   `newtonsoft.json.min`, `Kusto.Language.Bridge.min`) are served as raw
-   CJS that fails to evaluate as ES modules inside the worker. Force the
-   optimizer to pre-bundle them via `optimizeDeps.include`.
-2. **Node-globals.** `@kusto/language-service` references `Buffer`,
-   `process`, and friends, so the worker needs `vite-plugin-node-polyfills`.
-
-The shape below mirrors the upstream `samples/esm-vite` config (adapted for
-pnpm, where transitive deps require the `parent > child` form):
-
-```ts
-// vite.config.ts
-import { defineConfig } from 'vite';
-import { nodePolyfills } from 'vite-plugin-node-polyfills';
-
-export default defineConfig({
-    plugins: [
-        /* ...your plugins, */
-        nodePolyfills({ overrides: { fs: null } }),
-    ],
-    optimizeDeps: {
-        include: [
-            'monaco-editor/esm/vs/editor/editor.worker',
-            '@kusto/monaco-kusto/release/esm/kusto.worker',
-            '@kusto/monaco-kusto > xregexp',
-            '@kusto/monaco-kusto > @kusto/language-service/bridge.min',
-            '@kusto/monaco-kusto > @kusto/language-service/Kusto.JavaScript.Client.min',
-            '@kusto/monaco-kusto > @kusto/language-service/newtonsoft.json.min',
-            '@kusto/monaco-kusto > @kusto/language-service-next/Kusto.Language.Bridge.min',
-        ],
-    },
-});
-```
-
-If a host project lifts `@kusto/language-service` and friends to direct
-dependencies (or doesn't use pnpm), the bare specifiers from the upstream
-sample work directly — drop the `@kusto/monaco-kusto > ` prefix.
-
-#### Defense-in-depth: Bridge.NET shim
-
-The pre-bundled output above wraps Bridge.NET in esbuild's CJS-to-ESM
-adapter, which is normally enough. As a safety net for code paths that
-serve those files outside the optimizer (e.g. during initial cold-start
-before optimization completes), you can also register a tiny `transform`
-plugin that primes the IIFE's CJS escape hatch:
-
-```ts
-import type { Plugin } from 'vite';
-
-const BRIDGE_NET_FILE_PATTERN =
-    /[\\/]@kusto[\\/](language-service|language-service-next)[\\/](bridge\.min|Kusto\.JavaScript\.Client\.min|newtonsoft\.json\.min|Kusto\.Language\.Bridge\.min)\.js(\?|$)/;
-
-function kustoBridgeShim(): Plugin {
-    return {
-        name: 'kusto-bridge-shim',
-        enforce: 'pre',
-        transform(code, id) {
-            if (!BRIDGE_NET_FILE_PATTERN.test(id)) {
-                return null;
-            }
-            const shim =
-                'var global=globalThis;var module={exports:{}};var exports=module.exports;\n';
-            return { code: shim + code, map: null };
-        },
-    };
-}
-```
+- Pre-bundle the kusto worker's CJS sub-deps (`xregexp` + the four
+  Bridge.NET IIFEs) as ESM.
+- Polyfill `Buffer` / `process` globals inside the worker (Webpack's
+  `node` config or a plugin like `node-polyfill-webpack-plugin`).
+- Patch the Bridge.NET IIFE files so their CJS escape hatch fires under
+  strict ESM (Webpack's `imports-loader` can prepend the same one-line
+  shim the traverse Vite plugin uses).
 
 ### Perceived-perf: pre-warm the kusto worker
 
@@ -221,11 +212,11 @@ only constructs the worker on first kusto-model interaction, so semantic
 syntax-highlighting "pops in" a beat after the editor first paints.
 
 Pre-warm both workers eagerly during `requestIdleCallback` to overlap that
-evaluation with React render + auth init. The `<Explorer>` host can hand
-the warm worker back to Monaco when it finally asks:
+evaluation with React render + auth init. The `<Explorer>` host hands the
+warm worker back to Monaco when it finally asks:
 
 ```ts
-// monacoWorkers.ts
+// src/monacoWorkers.ts (pre-warmed variant)
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker.js?worker';
 import KustoWorker from '@kusto/monaco-kusto/release/esm/kusto.worker.js?worker';
 import { configureTraverseMonacoWorkers } from '@mhjuma/traverse';
@@ -244,12 +235,12 @@ function takeWarmWorker(label: 'editor' | 'kusto'): Worker {
     return w ?? new KustoWorker();
 }
 
-export function configureAppMonacoWorkers(): void {
-    configureTraverseMonacoWorkers({
-        getEditorWorker: () => takeWarmWorker('editor'),
-        getKustoWorker: () => takeWarmWorker('kusto'),
-    });
-    if (typeof window === 'undefined') return;
+configureTraverseMonacoWorkers({
+    getEditorWorker: () => takeWarmWorker('editor'),
+    getKustoWorker: () => takeWarmWorker('kusto'),
+});
+
+if (typeof window !== 'undefined') {
     const prewarm = () => {
         try {
             warmEditorWorker ??= new EditorWorker();
@@ -264,7 +255,7 @@ export function configureAppMonacoWorkers(): void {
 }
 ```
 
-`traverse-core` itself complements this by pre-bootstrapping the kusto
+`@mhjuma/traverse` itself complements this by pre-bootstrapping the kusto
 language inside `monacoLoader.ts` (registers Monarch tokens + themes during
 module load), so first paint already shows colored keywords and strings —
 no consumer wiring needed for that piece.

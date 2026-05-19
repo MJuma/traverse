@@ -99,10 +99,139 @@ export interface BootstrapExplorerOptions {
 }
 
 /**
+ * MSAL error codes that mean: "I tried to process a redirect response, but
+ * I can't find the request that initiated it." This happens after a popup
+ * closes prematurely, after sessionStorage is cleared between redirect and
+ * return, or when the user reloads with auth fragments still in the URL
+ * from a previous broken flow. All recoverable — clear the URL and proceed
+ * with a fresh auth attempt.
+ */
+const RECOVERABLE_MSAL_ERROR_CODES = new Set([
+    'no_token_request_cache_error',
+    'state_not_found',
+    'no_state_in_hash',
+]);
+
+function isRecoverableMsalError(err: unknown): boolean {
+    if (!err || typeof err !== 'object') {
+        return false;
+    }
+    const code = (err as { errorCode?: unknown }).errorCode;
+    return typeof code === 'string' && RECOVERABLE_MSAL_ERROR_CODES.has(code);
+}
+
+function clearAuthFragmentsFromUrl(): void {
+    if (typeof window === 'undefined' || !window.history?.replaceState) {
+        return;
+    }
+    try {
+        const url = new URL(window.location.href);
+        // The auth response lives in the URL hash for the implicit/fragment
+        // flow MSAL uses. Drop it entirely.
+        url.hash = '';
+        // Also strip OAuth-related query params (auth-code flow).
+        const oauthParams = ['code', 'state', 'session_state', 'error', 'error_description', 'client-request-id'];
+        for (const p of oauthParams) {
+            url.searchParams.delete(p);
+        }
+        window.history.replaceState({}, document.title, url.toString());
+    } catch {
+        // Best-effort — if URL parsing fails we leave the address bar alone.
+    }
+}
+
+/**
+ * Cheap precheck: does the current URL look like an MSAL auth response?
+ * MSAL always includes `state` alongside either `code` or `error`, in either
+ * the URL fragment (implicit/fragment flow) or the query string (auth-code
+ * flow). We only kick off the bridge handoff when this is true to avoid
+ * paying the dynamic import cost on every page load.
+ */
+function hasAuthResponseInUrl(): boolean {
+    if (typeof window === 'undefined') {
+        return false;
+    }
+    const inSearch = (() => {
+        const params = new URLSearchParams(window.location.search);
+        return params.has('state') && (params.has('code') || params.has('error'));
+    })();
+    if (inSearch) {
+        return true;
+    }
+    const hash = window.location.hash;
+    if (hash.length > 1) {
+        const params = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash);
+        if (params.has('state') && (params.has('code') || params.has('error'))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Hand off to MSAL's official redirect bridge when this page is loaded as
+ * the redirect URI of a popup or redirect interaction. The bridge:
+ *
+ *  - For popup interactions: parses the auth payload from the URL,
+ *    broadcasts it on the `BroadcastChannel` the parent window is
+ *    listening to, then closes this window.
+ *  - For redirect interactions: caches the payload to sessionStorage and
+ *    navigates to the home page, where the next `handleRedirectPromise`
+ *    call picks it up.
+ *
+ * Without this, popup completion would never reach the parent window in
+ * MSAL.js 5.x — the popup would load the full Traverse SPA and the
+ * parent's `acquireTokenPopup` would time out waiting for a
+ * `BroadcastChannel` message that only the bridge knows how to send.
+ *
+ * Returns true when the bridge fired (caller should NOT bootstrap the
+ * normal app), false when the URL didn't have an auth response or the
+ * bridge couldn't process it (caller should fall through; existing
+ * recovery handles malformed URLs).
+ *
+ * The bridge is dynamically imported so embedders on older
+ * `@azure/msal-browser` versions (pre-5.x, where the `/redirect-bridge`
+ * subpath doesn't exist) gracefully degrade rather than failing at module
+ * load.
+ */
+async function tryHandleMsalRedirectBridge(): Promise<boolean> {
+    if (!hasAuthResponseInUrl()) {
+        return false;
+    }
+    try {
+        const mod = await import('@azure/msal-browser/redirect-bridge');
+        await mod.broadcastResponseToMainFrame();
+        return true;
+    } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[traverse] MSAL redirect bridge handoff failed; falling back to normal bootstrap.', err);
+        return false;
+    }
+}
+
+/**
  * Bootstraps a standalone Explorer app: handles MSAL auth, StateService
  * hydration, and renders the Explorer into #root.
  */
 export function bootstrapExplorer(options: BootstrapExplorerOptions): void {
+    void (async () => {
+        // Front door: if this page load is an MSAL popup post-back or a
+        // redirect post-back, hand off to MSAL's official bridge and DO
+        // NOT bootstrap the Traverse app. The bridge either broadcasts to
+        // the parent window and closes (popup) or navigates to the home
+        // page (redirect).
+        //
+        // This is a hard requirement of MSAL.js 5.x's popup flow — the
+        // parent's `acquireTokenPopup` is waiting on a `BroadcastChannel`
+        // message that only the bridge knows how to send.
+        if (await tryHandleMsalRedirectBridge()) {
+            return;
+        }
+        runNormalBootstrap(options);
+    })();
+}
+
+function runNormalBootstrap(options: BootstrapExplorerOptions): void {
     const {
         msalClientId, tenantId, redirectUri,
         clusterUrl, database,
@@ -141,9 +270,24 @@ export function bootstrapExplorer(options: BootstrapExplorerOptions): void {
 
     async function ensureAuthenticated(): Promise<void> {
         await msalInstance.initialize();
-        const redirectResult = await msalInstance.handleRedirectPromise();
-        if (redirectResult) {
-            return;
+        try {
+            const redirectResult = await msalInstance.handleRedirectPromise();
+            if (redirectResult) {
+                return;
+            }
+        } catch (err) {
+            if (isRecoverableMsalError(err)) {
+                // Residue from a previous incomplete redirect (popup that
+                // closed before posting back, sessionStorage cleared
+                // between redirect and return, scope rejected by AAD with
+                // no matching request, etc). The auth fragments in the URL
+                // no longer match anything in MSAL's cache. Strip them so
+                // the next reload doesn't keep hitting the same error, and
+                // fall through to the normal silent / loginRedirect flow.
+                clearAuthFragmentsFromUrl();
+            } else {
+                throw err;
+            }
         }
         const accounts = msalInstance.getAllAccounts();
         if (accounts.length > 0) {
@@ -180,9 +324,7 @@ export function bootstrapExplorer(options: BootstrapExplorerOptions): void {
         try {
             await ensureAuthenticated();
         } catch (err) {
-            const msg = err instanceof Error ? err.message : 'Unknown error';
-            document.getElementById('root')!.innerHTML =
-                `<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#bc5653">Authentication failed: ${msg}</div>`;
+            renderAuthErrorBanner(err);
             return;
         }
 
@@ -192,4 +334,28 @@ export function bootstrapExplorer(options: BootstrapExplorerOptions): void {
             </StrictMode>,
         );
     });
+}
+
+/**
+ * Render the startup auth-failure banner using safe DOM construction —
+ * never injects raw error text via `innerHTML` (the old approach was an
+ * XSS hazard, since MSAL/AAD error strings can contain attacker-controlled
+ * content from the URL, e.g. `error_description`).
+ */
+function renderAuthErrorBanner(err: unknown): void {
+    const root = document.getElementById('root');
+    if (!root) {
+        return;
+    }
+    const msg = err instanceof Error ? err.message : 'Unknown error';
+
+    // Replace any prior content.
+    while (root.firstChild) {
+        root.removeChild(root.firstChild);
+    }
+
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = 'display:flex;align-items:center;justify-content:center;height:100vh;color:#bc5653;padding:24px;text-align:center;font-family:system-ui,sans-serif';
+    wrapper.textContent = `Authentication failed: ${msg}`;
+    root.appendChild(wrapper);
 }

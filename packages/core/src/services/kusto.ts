@@ -13,6 +13,9 @@ import type { Priority } from './concurrency';
 const MAX_CONCURRENT = 8;
 const MAX_RETRIES = 3;
 const RETRY_BASE_MS = 2000;
+/** Cap on Retry-After honour. Prevents hostile servers (or stale dates) from
+ *  stalling Traverse's UI for arbitrarily long. */
+const RETRY_AFTER_CAP_MS = 60_000;
 
 export interface KustoTarget {
     clusterUrl: string;
@@ -236,6 +239,13 @@ export interface KustoClientConfig {
     defaultTarget: KustoTarget;
     getToken: (clusterUrl: string) => Promise<string>;
     stateService: KustoStateService;
+    /**
+     * Optional fetch implementation. Defaults to `globalThis.fetch`. Provide
+     * an override to route HTTP requests through a custom transport — for
+     * example a Tauri `tauri-plugin-http` shim (CORS-free desktop) or a
+     * server-side proxy.
+     */
+    fetch?: typeof fetch;
 }
 
 export interface KustoClient {
@@ -251,12 +261,105 @@ export interface KustoClient {
     getQueryCacheSize(): number;
 }
 
-async function fetchWithRetry(url: string, init: RequestInit, retries = MAX_RETRIES): Promise<Response> {
+/**
+ * Parse a `Retry-After` header value (RFC 7231): either delta-seconds or an
+ * HTTP-date. Returns the wait in milliseconds, capped at
+ * {@link RETRY_AFTER_CAP_MS}. Returns `null` when the header is absent or
+ * cannot be parsed so the caller falls back to exponential backoff.
+ */
+export function parseRetryAfter(value: string | null | undefined, now: number = Date.now()): number | null {
+    if (value === null || value === undefined || value.trim() === '') {
+        return null;
+    }
+    const trimmed = value.trim();
+    // Numeric form: non-negative integer or float, in seconds. Anchored at
+    // both ends; leading signs are explicitly rejected so '-1' doesn't fall
+    // through to the much more permissive Date.parse below.
+    if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
+        const seconds = Number(trimmed);
+        if (Number.isFinite(seconds) && seconds >= 0) {
+            return Math.min(seconds * 1000, RETRY_AFTER_CAP_MS);
+        }
+        return null;
+    }
+    // Anything that looks numeric-ish (signed, exponent, etc.) is also
+    // rejected — Retry-After's delta-seconds form is strict.
+    if (/^[+-]?\d/.test(trimmed) && !/[a-zA-Z]/.test(trimmed)) {
+        return null;
+    }
+    // HTTP-date form.
+    const dateMs = Date.parse(trimmed);
+    if (Number.isFinite(dateMs)) {
+        const delta = dateMs - now;
+        if (delta < 0) {
+            return 0;
+        }
+        return Math.min(delta, RETRY_AFTER_CAP_MS);
+    }
+    return null;
+}
+
+/**
+ * Sleep for `ms` milliseconds. Rejects with an `AbortError` the moment
+ * `signal` aborts. Cleans up its event listener / timer either way.
+ */
+export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            reject(makeAbortError());
+            return;
+        }
+        const timer = setTimeout(() => {
+            if (signal && onAbort) {
+                signal.removeEventListener('abort', onAbort);
+            }
+            resolve();
+        }, ms);
+        const onAbort = signal
+            ? () => {
+                clearTimeout(timer);
+                signal.removeEventListener('abort', onAbort!);
+                reject(makeAbortError());
+            }
+            : null;
+        if (signal && onAbort) {
+            signal.addEventListener('abort', onAbort, { once: true });
+        }
+    });
+}
+
+function makeAbortError(): Error {
+    if (typeof DOMException !== 'undefined') {
+        return new DOMException('Aborted', 'AbortError');
+    }
+    const err = new Error('Aborted');
+    err.name = 'AbortError';
+    return err;
+}
+
+async function fetchWithRetry(
+    fetchImpl: typeof fetch,
+    url: string,
+    init: RequestInit,
+    retries = MAX_RETRIES,
+): Promise<Response> {
+    const signal = init.signal ?? undefined;
     for (let attempt = 0; attempt <= retries; attempt++) {
-        const response = await fetch(url, init);
-        if (response.status === 429 && attempt < retries) {
-            const delay = RETRY_BASE_MS * Math.pow(2, attempt);
-            await new Promise((r) => setTimeout(r, delay));
+        if (signal?.aborted) {
+            throw makeAbortError();
+        }
+        const response = await fetchImpl(url, init);
+        const retryable = response.status === 429 || response.status === 503;
+        if (retryable && attempt < retries) {
+            // Defensive: real Response always has headers, but test doubles
+            // often omit them; fall through to exponential backoff in that
+            // case.
+            const headerVal = typeof response.headers?.get === 'function'
+                ? response.headers.get('Retry-After')
+                : null;
+            const fromHeader = parseRetryAfter(headerVal);
+            const delay = fromHeader !== null ? fromHeader : RETRY_BASE_MS * Math.pow(2, attempt);
+            await abortableSleep(delay, signal);
             continue;
         }
         return response;
@@ -266,6 +369,13 @@ async function fetchWithRetry(url: string, init: RequestInit, retries = MAX_RETR
 
 export function createKustoClient(config: KustoClientConfig): KustoClient {
     const { defaultTarget, getToken, stateService } = config;
+    /**
+     * Resolve the fetch implementation at call time rather than capturing it
+     * at construction. Tests stub `globalThis.fetch` after creating the
+     * client; capturing at construction would freeze the stale reference.
+     */
+    const resolveFetch = (): typeof fetch =>
+        config.fetch ?? globalThis.fetch.bind(globalThis);
     const limiter = new ConcurrencyLimiter(MAX_CONCURRENT);
     const inflightQueries = new Map<string, Promise<KustoResult<unknown>>>();
 
@@ -296,7 +406,7 @@ export function createKustoClient(config: KustoClientConfig): KustoClient {
         }
 
         try {
-            const response = await fetchWithRetry(`${t.clusterUrl}/v1/rest/query`, {
+            const response = await fetchWithRetry(resolveFetch(), `${t.clusterUrl}/v1/rest/query`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${token}`,
@@ -409,7 +519,7 @@ export function createKustoClient(config: KustoClientConfig): KustoClient {
             const timeout = setTimeout(() => controller.abort(), 60000);
 
             try {
-                const response = await fetchWithRetry(`${t.clusterUrl}/v1/rest/mgmt`, {
+                const response = await fetchWithRetry(resolveFetch(), `${t.clusterUrl}/v1/rest/mgmt`, {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${token}`,

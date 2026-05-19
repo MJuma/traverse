@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-import { extractStats, createKustoClient, parseVisualizationMetadata, buildResultSets } from './kusto';
+import { extractStats, createKustoClient, parseVisualizationMetadata, buildResultSets, parseRetryAfter, abortableSleep } from './kusto';
 import type { QueryStats, KustoClient, KustoStateService, RawTable, KustoVisualization } from './kusto';
 
 const KUSTO_CLUSTER = 'https://test-kusto.kusto.windows.net';
@@ -915,5 +915,159 @@ describe('queryKusto with custom target', () => {
         expect(fetchCall[0]).toContain('other.kusto.windows.net/v1/rest/query');
         const fetchBody = JSON.parse(fetchCall[1]?.body as string);
         expect(fetchBody.db).toBe('OtherDB');
+    });
+});
+
+describe('parseRetryAfter', () => {
+    const now = Date.parse('2024-01-01T00:00:00Z');
+
+    it('returns null for absent / empty values', () => {
+        expect(parseRetryAfter(null, now)).toBeNull();
+        expect(parseRetryAfter(undefined, now)).toBeNull();
+        expect(parseRetryAfter('', now)).toBeNull();
+        expect(parseRetryAfter('   ', now)).toBeNull();
+    });
+
+    it('parses delta-seconds (integer)', () => {
+        expect(parseRetryAfter('5', now)).toBe(5000);
+        expect(parseRetryAfter('0', now)).toBe(0);
+    });
+
+    it('parses delta-seconds (decimal)', () => {
+        expect(parseRetryAfter('2.5', now)).toBe(2500);
+    });
+
+    it('rejects signed delta-seconds (spec: non-negative integer only)', () => {
+        expect(parseRetryAfter('-1', now)).toBeNull();
+        expect(parseRetryAfter('+5', now)).toBeNull();
+    });
+
+    it('rejects garbage', () => {
+        expect(parseRetryAfter('soon', now)).toBeNull();
+        expect(parseRetryAfter('5x', now)).toBeNull();
+    });
+
+    it('parses HTTP-date and returns delta from now', () => {
+        const future = new Date(now + 30_000).toUTCString();
+        // Allow 1s slack for parsing precision.
+        const got = parseRetryAfter(future, now)!;
+        expect(got).toBeGreaterThanOrEqual(29_000);
+        expect(got).toBeLessThanOrEqual(31_000);
+    });
+
+    it('returns 0 for HTTP-date in the past', () => {
+        const past = new Date(now - 30_000).toUTCString();
+        expect(parseRetryAfter(past, now)).toBe(0);
+    });
+
+    it('caps very large values at 60s', () => {
+        expect(parseRetryAfter('3600', now)).toBe(60_000);
+        const far = new Date(now + 24 * 3600 * 1000).toUTCString();
+        expect(parseRetryAfter(far, now)).toBe(60_000);
+    });
+});
+
+describe('abortableSleep', () => {
+    it('resolves after the specified delay', async () => {
+        const start = Date.now();
+        await abortableSleep(20);
+        expect(Date.now() - start).toBeGreaterThanOrEqual(15);
+    });
+
+    it('rejects immediately with AbortError when signal is already aborted', async () => {
+        const ctrl = new AbortController();
+        ctrl.abort();
+        await expect(abortableSleep(100, ctrl.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    });
+
+    it('rejects with AbortError when signal aborts mid-sleep', async () => {
+        const ctrl = new AbortController();
+        const p = abortableSleep(500, ctrl.signal);
+        setTimeout(() => ctrl.abort(), 10);
+        await expect(p).rejects.toMatchObject({ name: 'AbortError' });
+    });
+});
+
+describe('createKustoClient with custom fetch', () => {
+    it('routes requests through the injected fetch implementation', async () => {
+        const stateService = createMockStateService();
+        const customFetch = vi.fn().mockResolvedValue({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({
+                Tables: [
+                    { Columns: [{ ColumnName: 'Id', ColumnType: 'long' }], Rows: [[1]] },
+                    { Columns: [{ ColumnName: 'Kind' }, { ColumnName: 'Ordinal' }], Rows: [['QueryResult', 0]] },
+                ],
+            }),
+            text: () => Promise.resolve(''),
+        });
+        // Don't stub global fetch — verify the custom one was used.
+        vi.stubGlobal('fetch', vi.fn(() => { throw new Error('global fetch should NOT be called'); }));
+        const client = createKustoClient({
+            defaultTarget: { clusterUrl: KUSTO_CLUSTER, database: KUSTO_DATABASE },
+            getToken: vi.fn().mockResolvedValue('mock-kusto-token'),
+            stateService,
+            fetch: customFetch,
+        });
+
+        await client.queryKusto('Tbl | take 1');
+        expect(customFetch).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('fetchWithRetry honours Retry-After (via 429/503)', () => {
+    let realDate: typeof Date.now;
+    beforeEach(() => { realDate = Date.now; });
+    afterEach(() => { Date.now = realDate; });
+
+    function makeResp(status: number, retryAfter?: string): Response {
+        return {
+            ok: status >= 200 && status < 300,
+            status,
+            headers: {
+                get: (name: string) => (name.toLowerCase() === 'retry-after' && retryAfter !== undefined) ? retryAfter : null,
+            },
+            text: () => Promise.resolve(''),
+            json: () => Promise.resolve({
+                Tables: [
+                    { Columns: [{ ColumnName: 'Id', ColumnType: 'long' }], Rows: [[1]] },
+                    { Columns: [{ ColumnName: 'Kind' }, { ColumnName: 'Ordinal' }], Rows: [['QueryResult', 0]] },
+                ],
+            }),
+        } as unknown as Response;
+    }
+
+    it('waits Retry-After seconds before retrying on 429', async () => {
+        const stateService = createMockStateService();
+        // 1st call → 429 with Retry-After: 0 (so test runs fast), 2nd → 200.
+        const fetchImpl = vi.fn()
+            .mockResolvedValueOnce(makeResp(429, '0'))
+            .mockResolvedValueOnce(makeResp(200));
+        const client = createKustoClient({
+            defaultTarget: { clusterUrl: KUSTO_CLUSTER, database: KUSTO_DATABASE },
+            getToken: vi.fn().mockResolvedValue('mock-kusto-token'),
+            stateService,
+            fetch: fetchImpl as unknown as typeof fetch,
+        });
+
+        await client.queryKusto('Tbl | take 1');
+        expect(fetchImpl).toHaveBeenCalledTimes(2);
+    });
+
+    it('also retries on 503', async () => {
+        const stateService = createMockStateService();
+        const fetchImpl = vi.fn()
+            .mockResolvedValueOnce(makeResp(503, '0'))
+            .mockResolvedValueOnce(makeResp(200));
+        const client = createKustoClient({
+            defaultTarget: { clusterUrl: KUSTO_CLUSTER, database: KUSTO_DATABASE },
+            getToken: vi.fn().mockResolvedValue('mock-kusto-token'),
+            stateService,
+            fetch: fetchImpl as unknown as typeof fetch,
+        });
+
+        await client.queryKusto('Tbl | take 1');
+        expect(fetchImpl).toHaveBeenCalledTimes(2);
     });
 });

@@ -3,6 +3,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { act } from 'react';
 import { Explorer } from './Explorer';
+import { configureTraverseMonacoWorkers, __resetWorkerConfigForTests } from '../ExplorerWorkspace/monacoWorkers';
 
 vi.mock('@monaco-editor/react', () => ({
     Editor: () => React.createElement('div', { 'data-testid': 'monaco-editor' }),
@@ -165,6 +166,12 @@ describe('Explorer', () => {
         mockExplorerState.mockReturnValue(defaultExplorerState);
         mockActiveTabs.mockReturnValue({ activeTab: mockActiveTab, splitTab: null });
         mockDispatch.mockClear();
+        // Satisfy the new render-time worker-config check. The stub Worker
+        // is never actually invoked because @monaco-editor/react is mocked
+        // out — it only needs to be a function so the assertion passes.
+        __resetWorkerConfigForTests();
+        const stub = (() => ({})) as unknown as () => Worker;
+        configureTraverseMonacoWorkers({ getEditorWorker: stub, getKustoWorker: stub });
     });
 
     afterEach(() => {
@@ -181,6 +188,32 @@ describe('Explorer', () => {
             root.render(React.createElement(Explorer));
         });
         expect(container.innerHTML).not.toBe('');
+    });
+
+    it('renders the MonacoConfigErrorBanner when workers are not configured', () => {
+        // Tear down the test-setup config so the assertion fires.
+        __resetWorkerConfigForTests();
+        act(() => {
+            root.render(React.createElement(Explorer));
+        });
+        // The banner shows the actionable hint.
+        expect(container.innerHTML).toContain('configureTraverseMonacoWorkers');
+        expect(container.innerHTML).toContain('Monaco workers');
+        // None of the editor / sidebar children should be in the tree —
+        // the early return short-circuited before ExplorerWorkspace mounted.
+        expect(container.querySelector('[data-testid="monaco-editor"]')).toBeNull();
+        expect(container.querySelector('[data-testid="schema-sidebar"]')).toBeNull();
+    });
+
+    it('renders a user-supplied fallback when monacoConfigErrorFallback prop is given', () => {
+        __resetWorkerConfigForTests();
+        const fallback = vi.fn((err: { summary: string }) =>
+            React.createElement('div', { 'data-testid': 'custom-fallback' }, err.summary));
+        act(() => {
+            root.render(React.createElement(Explorer, { monacoConfigErrorFallback: fallback } as never));
+        });
+        expect(container.querySelector('[data-testid="custom-fallback"]')).not.toBeNull();
+        expect(fallback).toHaveBeenCalled();
     });
 
     it('renders with split mode enabled', () => {
@@ -649,6 +682,9 @@ describe('Explorer snapshot persistence', () => {
         mockExplorerState.mockReturnValue(defaultExplorerState);
         mockActiveTabs.mockReturnValue({ activeTab: mockActiveTab, splitTab: null });
         originalLocation = window.location;
+        __resetWorkerConfigForTests();
+        const stub = (() => ({})) as unknown as () => Worker;
+        configureTraverseMonacoWorkers({ getEditorWorker: stub, getKustoWorker: stub });
 
         const persistence = await import('../../state/persistence');
         saveSpy = persistence.saveSnapshot as unknown as ReturnType<typeof vi.fn>;

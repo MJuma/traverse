@@ -12,6 +12,9 @@ import { DEFAULT_QUERY, buildWellKnownClusters } from '../ExplorerWorkspace/Expl
 import type { WellKnownCluster } from '../ExplorerWorkspace/ExplorerWorkspace.logic';
 import { ExplorerWorkspace } from '../ExplorerWorkspace/ExplorerWorkspace';
 import { preloadKustoLanguage } from '../ExplorerWorkspace/monacoLoader';
+import { getMonacoWorkerConfigurationError } from '../ExplorerWorkspace/monacoWorkers';
+import type { MonacoWorkerConfigurationError } from '../ExplorerWorkspace/monacoWorkers';
+import { MonacoConfigErrorBanner } from './MonacoConfigErrorBanner';
 
 export interface ExplorerProps {
     className?: string;
@@ -26,6 +29,12 @@ export interface ExplorerProps {
      * Falls back to the package's built-in `DEFAULT_QUERY` when omitted.
      */
     initialQuery?: string;
+    /**
+     * Override the rendered placeholder when Monaco workers haven't been
+     * configured. Defaults to the built-in `MonacoConfigErrorBanner` —
+     * supply your own to integrate with your app's error UI.
+     */
+    monacoConfigErrorFallback?: (error: MonacoWorkerConfigurationError) => React.ReactNode;
 }
 
 /**
@@ -36,6 +45,19 @@ export interface ExplorerProps {
 const SNAPSHOT_SAVE_DEBOUNCE_MS = 300;
 
 export function Explorer(props: ExplorerProps) {
+    // Synchronous, render-time check: bail out with an actionable placeholder
+    // before any kusto code can fire. Without `configureTraverseMonacoWorkers`,
+    // Monaco silently falls back to in-thread mode and the @kusto/monaco-kusto
+    // schema queue cascades through "Missing requestHandler", "doFolding is
+    // not a function", and friends — none of which surface the real problem.
+    const monacoConfigError = getMonacoWorkerConfigurationError();
+    if (monacoConfigError) {
+        if (props.monacoConfigErrorFallback) {
+            return <>{props.monacoConfigErrorFallback(monacoConfigError)}</>;
+        }
+        return <MonacoConfigErrorBanner error={monacoConfigError} className={props.className} />;
+    }
+
     // Trigger kusto language preload on first Explorer render. Editor-gated
     // by design (here, not at module load) so consumers using only
     // non-editor APIs from `@mhjuma/traverse` don't pay the kusto chunk cost.

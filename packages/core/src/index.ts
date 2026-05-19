@@ -14,5 +14,6 @@ export { bootstrapExplorer, useExplorerTheme } from './bootstrap';
 export type { BootstrapExplorerOptions } from './bootstrap';
 export { loadSnapshot, saveSnapshot, clearSnapshot, validateAndCleanSnapshot, extractSnapshot, SNAPSHOT_VERSION } from './state/persistence';
 export type { ExplorerTabsSnapshot } from './state/persistence';
-export { configureTraverseMonacoWorkers } from './components/ExplorerWorkspace/monacoWorkers';
-export type { MonacoWorkerConfig, MonacoWorkerFactory } from './components/ExplorerWorkspace/monacoWorkers';
+export { configureTraverseMonacoWorkers, getMonacoWorkerConfigurationError } from './components/ExplorerWorkspace/monacoWorkers';
+export type { MonacoWorkerConfig, MonacoWorkerFactory, MonacoWorkerConfigurationError } from './components/ExplorerWorkspace/monacoWorkers';
+export { MonacoConfigErrorBanner } from './components/Explorer/MonacoConfigErrorBanner';
