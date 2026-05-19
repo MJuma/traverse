@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-import { configureTraverseMonacoWorkers, __resetWorkerConfigForTests } from './monacoWorkers';
+import { configureTraverseMonacoWorkers, getMonacoWorkerConfigurationError, __resetWorkerConfigForTests } from './monacoWorkers';
 
 interface GlobalWithMonaco {
     MonacoEnvironment?: { getWorker?: (workerId: string, label: string) => Worker };
@@ -77,5 +77,70 @@ describe('configureTraverseMonacoWorkers', () => {
         const w = getMonacoEnvironment()!.getWorker!('id-1', 'editorWorkerService');
         expect(w).toBe(hostWorker);
         expect(hostGetWorker).toHaveBeenCalledWith('id-1', 'editorWorkerService');
+    });
+});
+
+describe('getMonacoWorkerConfigurationError', () => {
+    beforeEach(() => {
+        __resetWorkerConfigForTests();
+    });
+
+    it('returns an error when configureTraverseMonacoWorkers was never called', () => {
+        const err = getMonacoWorkerConfigurationError();
+        expect(err).not.toBeNull();
+        expect(err!.kind).toBe('missing-kusto-worker');
+        expect(err!.summary).toMatch(/not configured/i);
+        // The hint must show the consumer the actual snippet to copy.
+        expect(err!.hint).toContain('configureTraverseMonacoWorkers');
+        expect(err!.hint).toContain('getKustoWorker');
+        expect(err!.hint).toContain("'monaco-editor/esm/vs/editor/editor.worker.js?worker'");
+        expect(err!.hint).toContain("'@kusto/monaco-kusto/release/esm/kusto.worker.js?worker'");
+    });
+
+    it('returns an error when configure was called but getKustoWorker is missing', () => {
+        // Edge case: host calls configure with only an editor worker.
+        configureTraverseMonacoWorkers({ getEditorWorker: () => ({}) as Worker });
+        const err = getMonacoWorkerConfigurationError();
+        expect(err).not.toBeNull();
+        expect(err!.kind).toBe('missing-kusto-worker');
+    });
+
+    it('returns missing-editor-worker when getKustoWorker is set but getEditorWorker is missing and no host fallback exists', () => {
+        configureTraverseMonacoWorkers({ getKustoWorker: () => ({}) as Worker });
+        const err = getMonacoWorkerConfigurationError();
+        expect(err).not.toBeNull();
+        expect(err!.kind).toBe('missing-editor-worker');
+        expect(err!.hint).toContain('getEditorWorker');
+        expect(err!.hint).toContain("'monaco-editor/esm/vs/editor/editor.worker.js?worker'");
+    });
+
+    it('does NOT return missing-editor-worker if a host MonacoEnvironment.getWorker was installed BEFORE configure', () => {
+        // Host (e.g. another editor wrapper) installed its own getWorker.
+        // Configure-with-only-kusto is fine in this case because the host
+        // handles non-kusto labels via the fallback chain.
+        (globalThis as unknown as GlobalWithMonaco).MonacoEnvironment = {
+            getWorker: () => ({}) as Worker,
+        };
+        configureTraverseMonacoWorkers({ getKustoWorker: () => ({}) as Worker });
+        expect(getMonacoWorkerConfigurationError()).toBeNull();
+    });
+
+    it('returns null when both workers are configured', () => {
+        configureTraverseMonacoWorkers({
+            getEditorWorker: () => ({}) as Worker,
+            getKustoWorker: () => ({}) as Worker,
+        });
+        expect(getMonacoWorkerConfigurationError()).toBeNull();
+    });
+
+    it('does NOT trust a host-installed MonacoEnvironment.getWorker — must be configured via traverse', () => {
+        // Pretend the host installed its own getWorker (e.g. for its own
+        // non-kusto editors). That doesn't mean kusto is set up.
+        (globalThis as unknown as GlobalWithMonaco).MonacoEnvironment = {
+            getWorker: () => ({}) as Worker,
+        };
+        const err = getMonacoWorkerConfigurationError();
+        expect(err).not.toBeNull();
+        expect(err!.kind).toBe('missing-kusto-worker');
     });
 });

@@ -280,11 +280,201 @@ describe('bootstrapExplorer', () => {
             database: 'Samples',
         });
 
-        expect(hydrateSpy).toHaveBeenCalled();
-
-        // Wait for the async chain (hydrate → auth → render) to settle
+        // Bootstrap is now wrapped in an async IIFE (so the MSAL redirect
+        // bridge can short-circuit before any normal app bootstrap), so
+        // hydrate is called asynchronously after the bridge precheck.
         await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
 
+        expect(hydrateSpy).toHaveBeenCalled();
+
         rootEl.remove();
+    });
+});
+
+describe('bootstrapExplorer MSAL redirect bridge handoff', () => {
+    let originalLocation: Location;
+
+    beforeEach(() => {
+        originalLocation = window.location;
+        // The shared hydrate mock from the top-level vi.mock factory persists
+        // across tests; reset its call count so each test sees a clean slate.
+        const sharedHydrate = (stateService as unknown as { hydrate: ReturnType<typeof vi.fn> }).hydrate;
+        if (sharedHydrate?.mockClear) {
+            sharedHydrate.mockClear();
+        }
+    });
+
+    afterEach(() => {
+        Object.defineProperty(window, 'location', { value: originalLocation, configurable: true });
+        vi.doUnmock('@azure/msal-browser/redirect-bridge');
+        vi.resetModules();
+    });
+
+    function stubLocation(url: string): void {
+        const parsed = new URL(url);
+        Object.defineProperty(window, 'location', {
+            value: { ...originalLocation, href: url, search: parsed.search, hash: parsed.hash },
+            configurable: true,
+        });
+    }
+
+    it('hands off to the MSAL redirect bridge when the URL carries an auth response and skips normal bootstrap', async () => {
+        const rootEl = document.createElement('div');
+        rootEl.id = 'root';
+        document.body.appendChild(rootEl);
+
+        stubLocation('http://localhost:3000/#code=abc&state=eyJpZCI6InRlc3QifQ==');
+
+        const broadcastSpy = vi.fn().mockResolvedValue(undefined);
+        vi.doMock('@azure/msal-browser/redirect-bridge', () => ({
+            broadcastResponseToMainFrame: broadcastSpy,
+        }));
+
+        // Re-import bootstrap so its dynamic-import call resolves through
+        // the new vi.doMock factory.
+        vi.resetModules();
+        const { bootstrapExplorer: freshBootstrap } = await import('./bootstrap');
+        const { stateService: freshState } = await import('./services/state-service');
+        const hydrateSpy = vi.spyOn(freshState, 'hydrate');
+
+        freshBootstrap({
+            msalClientId: 'test-client',
+            tenantId: 'test-tenant',
+            redirectUri: 'http://localhost:3000',
+            clusterUrl: 'https://help.kusto.windows.net',
+            database: 'Samples',
+        });
+
+        await act(async () => { await new Promise((r) => setTimeout(r, 80)); });
+
+        expect(broadcastSpy).toHaveBeenCalled();
+        expect(hydrateSpy).not.toHaveBeenCalled();
+
+        rootEl.remove();
+    });
+
+    it('falls through to normal bootstrap when the URL has no auth response', async () => {
+        const rootEl = document.createElement('div');
+        rootEl.id = 'root';
+        document.body.appendChild(rootEl);
+
+        stubLocation('http://localhost:3000/');
+
+        const hydrateSpy = vi.spyOn(stateService, 'hydrate');
+
+        bootstrapExplorer({
+            msalClientId: 'test-client',
+            tenantId: 'test-tenant',
+            redirectUri: 'http://localhost:3000',
+            clusterUrl: 'https://help.kusto.windows.net',
+            database: 'Samples',
+        });
+
+        await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+
+        expect(hydrateSpy).toHaveBeenCalled();
+
+        rootEl.remove();
+    });
+
+    it('falls through to normal bootstrap when the bridge import fails (older MSAL versions)', async () => {
+        const rootEl = document.createElement('div');
+        rootEl.id = 'root';
+        document.body.appendChild(rootEl);
+
+        stubLocation('http://localhost:3000/#code=abc&state=xyz');
+
+        vi.doMock('@azure/msal-browser/redirect-bridge', () => {
+            throw new Error('Module not found');
+        });
+
+        vi.resetModules();
+        const { bootstrapExplorer: freshBootstrap } = await import('./bootstrap');
+        const { stateService: freshState } = await import('./services/state-service');
+        const hydrateSpy = vi.spyOn(freshState, 'hydrate');
+
+        freshBootstrap({
+            msalClientId: 'test-client',
+            tenantId: 'test-tenant',
+            redirectUri: 'http://localhost:3000',
+            clusterUrl: 'https://help.kusto.windows.net',
+            database: 'Samples',
+        });
+
+        await act(async () => { await new Promise((r) => setTimeout(r, 80)); });
+
+        // Bridge failed → graceful degradation, normal bootstrap still ran.
+        expect(hydrateSpy).toHaveBeenCalled();
+
+        rootEl.remove();
+    });
+});
+
+describe('bootstrapExplorer auth error banner safety', () => {
+    let originalLocation: Location;
+
+    beforeEach(() => {
+        originalLocation = window.location;
+    });
+
+    afterEach(() => {
+        Object.defineProperty(window, 'location', { value: originalLocation, configurable: true });
+        vi.doUnmock('@azure/msal-browser');
+        vi.resetModules();
+    });
+
+    function stubLocation(url: string): void {
+        const parsed = new URL(url);
+        Object.defineProperty(window, 'location', {
+            value: { ...originalLocation, href: url, search: parsed.search, hash: parsed.hash },
+            configurable: true,
+        });
+    }
+
+    it('renders the auth-failure banner using safe DOM construction (no innerHTML)', async () => {
+        const rootEl = document.createElement('div');
+        rootEl.id = 'root';
+        document.body.appendChild(rootEl);
+
+        stubLocation('http://localhost:3000/');
+
+        // Re-mock @azure/msal-browser so handleRedirectPromise throws a
+        // non-recoverable error containing an XSS payload.
+        const xssMsg = '<img src=x onerror="window.__pwn__=true">';
+        vi.doMock('@azure/msal-browser', () => {
+            class FailingMsal {
+                initialize = vi.fn().mockResolvedValue(undefined);
+                getAllAccounts = vi.fn().mockReturnValue([]);
+                acquireTokenPopup = vi.fn().mockResolvedValue({ accessToken: 'token' });
+                acquireTokenSilent = vi.fn().mockResolvedValue({ accessToken: 'token' });
+                handleRedirectPromise = vi.fn().mockRejectedValue(new Error(xssMsg));
+                loginRedirect = vi.fn().mockResolvedValue(undefined);
+            }
+            return { PublicClientApplication: FailingMsal };
+        });
+
+        vi.resetModules();
+        const { bootstrapExplorer: freshBootstrap } = await import('./bootstrap');
+
+        try {
+            freshBootstrap({
+                msalClientId: 'test-client',
+                tenantId: 'test-tenant',
+                redirectUri: 'http://localhost:3000',
+                clusterUrl: 'https://help.kusto.windows.net',
+                database: 'Samples',
+            });
+
+            await act(async () => { await new Promise((r) => setTimeout(r, 100)); });
+
+            // The malicious payload must NOT be parsed as HTML — neither the
+            // img tag nor the script should appear in the DOM as elements.
+            expect(rootEl.querySelector('img')).toBeNull();
+            expect((window as unknown as { __pwn__?: boolean }).__pwn__).toBeUndefined();
+            // But the message text should still be present as text.
+            expect(rootEl.textContent).toContain(xssMsg);
+        } finally {
+            rootEl.remove();
+        }
     });
 });
